@@ -51,26 +51,33 @@ final fontSizeProvider = StateProvider<Map<String, double>>((ref) => {
 final textAlignmentProvider =
     StateProvider<TextAlign>((ref) => TextAlign.center);
 
-// ==================== AUTO-FLIP PROVIDER ====================
-
 final autoFlipProvider = StateProvider<Map<String, dynamic>>((ref) => {
       'enabled': false,
-      'duration': 3.0, // seconds
+      'duration': 3.0,
     });
-
-final autoFlipTimerProvider = StateProvider<Timer?>((ref) => null);
-final isAutoFlippingProvider = StateProvider<bool>((ref) => false);
-
-// ==================== TTS PROVIDER ====================
 
 final ttsProvider = StateProvider<Map<String, dynamic>>((ref) => {
       'enabled': true,
-      'autoPlay': false, // Tự động phát khi lật thẻ
-      'language': 'ja', // 'ja', 'en', 'vi', 'zh'
+      'autoPlay': false,
+      'language': 'ja',
     });
 
-final ttsLanguageProvider = StateProvider<String>((ref) => 'ja');
+final srsSettingsProvider = StateProvider<Map<String, dynamic>>((ref) => {
+      'enabled': false,
+      'showReviewQueue': true,
+    });
+
+final reviewQueueProvider = StateProvider<List<Flashcard>>((ref) => []);
+final isAutoFlippingProvider = StateProvider<bool>((ref) => false);
 final isTtsPlayingProvider = StateProvider<bool>((ref) => false);
+
+// ==================== AUTO-FLIP PROVIDER ====================
+
+final autoFlipTimerProvider = StateProvider<Timer?>((ref) => null);
+
+// ==================== TTS PROVIDER ====================
+
+final ttsLanguageProvider = StateProvider<String>((ref) => 'ja');
 
 // ==================== STUDY PAGE ====================
 
@@ -577,6 +584,45 @@ class _StudyPageState extends ConsumerState<StudyPage> {
       title: const Text('Study'),
       backgroundColor: Theme.of(context).colorScheme.inversePrimary,
       actions: [
+        // Auto-flip toggle (ngoài)
+        IconButton(
+          icon: Stack(
+            alignment: Alignment.center,
+            children: [
+              Icon(
+                isAutoFlipping ? Icons.play_circle : Icons.play_circle_outline,
+                color: isAutoFlipping ? Colors.green : Colors.grey,
+              ),
+              if (isAutoFlipping)
+                Positioned(
+                  top: 0,
+                  right: 0,
+                  child: Container(
+                    width: 8,
+                    height: 8,
+                    decoration: const BoxDecoration(
+                      color: Colors.green,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          onPressed: () {
+            // Toggle auto-flip nhanh
+            final settings = ref.read(autoFlipProvider);
+            final enabled = settings['enabled'] ?? false;
+            final newEnabled = !enabled;
+            settings['enabled'] = newEnabled;
+            ref.read(autoFlipProvider.notifier).state = settings;
+            if (newEnabled) {
+              _startAutoFlip();
+            } else {
+              _stopAutoFlip();
+            }
+          },
+          tooltip: 'Toggle Auto-flip',
+        ),
         // Settings button (gộp tất cả)
         IconButton(
           icon: const Icon(Icons.settings),
@@ -615,7 +661,7 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                 ),
                 padding: const EdgeInsets.all(16),
                 child: DefaultTabController(
-                  length: 3,
+                  length: 4,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -644,6 +690,7 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                       // Tabs
                       const TabBar(
                         tabs: [
+                          Tab(text: 'Auto-Flip'),
                           Tab(text: 'TTS'),
                           Tab(text: 'Font Size'),
                           Tab(text: 'Customize'),
@@ -656,6 +703,8 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                       Expanded(
                         child: TabBarView(
                           children: [
+                            // Tab 0: Auto-Flip Settings
+                            _buildAutoFlipTab(),
                             // Tab 1: TTS Settings
                             _buildTtsTab(),
                             // Tab 2: Font Size Settings
@@ -677,6 +726,127 @@ class _StudyPageState extends ConsumerState<StudyPage> {
   }
 
   // ==================== SETTINGS TABS ====================
+  // ==================== AUTO-FLIP TAB ====================
+
+  Widget _buildAutoFlipTab() {
+    final settings = ref.watch(autoFlipProvider);
+    final enabled = settings['enabled'] ?? false;
+    final duration = settings['duration'] ?? 3.0;
+
+    return StatefulBuilder(
+      builder: (context, setState) {
+        bool tempEnabled = enabled;
+        double tempDuration = duration;
+
+        return SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Enable/Disable
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'Enable Auto-Flip',
+                    style: TextStyle(fontSize: 16),
+                  ),
+                  Switch(
+                    value: tempEnabled,
+                    onChanged: (value) {
+                      setState(() {
+                        tempEnabled = value;
+                      });
+                      final newSettings = {
+                        'enabled': tempEnabled,
+                        'duration': tempDuration,
+                      };
+                      ref.read(autoFlipProvider.notifier).state = newSettings;
+                      if (tempEnabled) {
+                        _startAutoFlip();
+                      } else {
+                        _stopAutoFlip();
+                      }
+                    },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+
+              // Duration slider
+              if (tempEnabled) ...[
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Flip Interval:',
+                      style: TextStyle(fontWeight: FontWeight.w500),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.shade50,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        '${tempDuration.toStringAsFixed(1)}s',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.blue,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                Slider(
+                  value: tempDuration,
+                  min: 0.5,
+                  max: 10.0,
+                  divisions: 19,
+                  label: '${tempDuration.toStringAsFixed(1)}s',
+                  onChanged: (value) {
+                    setState(() {
+                      tempDuration = value;
+                    });
+                    final newSettings = {
+                      'enabled': tempEnabled,
+                      'duration': tempDuration,
+                    };
+                    ref.read(autoFlipProvider.notifier).state = newSettings;
+                    if (tempEnabled) {
+                      _startAutoFlip();
+                    }
+                  },
+                  activeColor: Colors.blue,
+                ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      '0.5s',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
+                    Text(
+                      '10s',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+// ==================== TTS TAB ====================
 
   Widget _buildTtsTab() {
     final settings = ref.watch(ttsProvider);
@@ -708,7 +878,6 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                       setState(() {
                         tempEnabled = value;
                       });
-                      // Lưu ngay khi thay đổi
                       final newSettings = {
                         'enabled': tempEnabled,
                         'autoPlay': tempAutoPlay,
@@ -788,6 +957,8 @@ class _StudyPageState extends ConsumerState<StudyPage> {
       },
     );
   }
+
+// ==================== FONT SIZE TAB ====================
 
   Widget _buildFontSizeTab() {
     final fontSizes = ref.watch(fontSizeProvider);
@@ -924,7 +1095,7 @@ class _StudyPageState extends ConsumerState<StudyPage> {
           Center(
             child: TextButton(
               onPressed: () {
-                final defaultSizes = {
+                final defaultSizes = <String, double>{
                   'vietnamese': 28.0,
                   'english': 20.0,
                   'jpKanji': 24.0,
@@ -950,6 +1121,8 @@ class _StudyPageState extends ConsumerState<StudyPage> {
       ),
     );
   }
+
+// ==================== CUSTOMIZE TAB ====================
 
   Widget _buildCustomizeTab() {
     final settings = ref.watch(studySettingsProvider);
@@ -1127,10 +1300,13 @@ class _StudyPageState extends ConsumerState<StudyPage> {
       ),
     );
   }
-
   // ==================== BOTTOM CONTROLS ====================
 
   Widget _buildBottomControls() {
+    final srsSettings = ref.watch(srsSettingsProvider);
+    final isSrsEnabled = srsSettings['enabled'] ?? false;
+    final reviewCards = ref.watch(reviewQueueProvider);
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
@@ -1146,6 +1322,38 @@ class _StudyPageState extends ConsumerState<StudyPage> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // SRS Row
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              // SRS Enable toggle
+              Row(
+                children: [
+                  const Icon(Icons.psychology, size: 20, color: Colors.purple),
+                  const SizedBox(width: 4),
+                  Switch(
+                    value: isSrsEnabled,
+                    onChanged: _toggleSrs,
+                    activeColor: Colors.purple,
+                  ),
+                ],
+              ),
+              // SRS Review Queue button
+              if (isSrsEnabled)
+                Badge(
+                  label: Text('${reviewCards.length}'),
+                  isLabelVisible: reviewCards.isNotEmpty,
+                  child: IconButton(
+                    icon: const Icon(Icons.assignment, color: Colors.orange),
+                    onPressed: _showReviewQueue,
+                    tooltip: 'Review Queue',
+                  ),
+                ),
+            ],
+          ),
+
+          const Divider(height: 8),
+
           // Status filter row
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -1159,10 +1367,8 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                     final allSelected =
                         _statusFilters.values.every((v) => v == true);
                     if (allSelected) {
-                      // Nếu đang all, bỏ chọn tất cả (sẽ tự động reset về all trong getter)
                       _statusFilters.updateAll((key, value) => false);
                     } else {
-                      // Nếu không all, chọn tất cả
                       _statusFilters.updateAll((key, value) => true);
                     }
                     _currentIndex = 0;
@@ -1449,6 +1655,9 @@ class _StudyPageState extends ConsumerState<StudyPage> {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
     final isTtsEnabled = ttsSettings['enabled'] ?? true;
     final currentLanguage = ttsSettings['language'] ?? 'ja';
+    // Thêm vào đầu hàm _buildBackCard
+    final srsSettings = ref.watch(srsSettingsProvider);
+    final isSrsEnabled = srsSettings['enabled'] ?? false;
 
     List<String> backFields = [];
     final backData = settings['backFields'];
@@ -1560,6 +1769,50 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                   ),
                   Row(
                     children: [
+                      if (isSrsEnabled) ...[
+                        const SizedBox(height: 16),
+                        const Divider(),
+                        const SizedBox(height: 8),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Text(
+                              'Rate your recall:',
+                              style: TextStyle(
+                                  fontSize: 14, fontWeight: FontWeight.w500),
+                            ),
+                            const SizedBox(width: 8),
+                            IconButton(
+                              icon: const Icon(
+                                  Icons.sentiment_very_dissatisfied,
+                                  color: Colors.red),
+                              onPressed: () {
+                                _updateSrsStatus(card.id, 'hard');
+                              },
+                              tooltip: 'Hard',
+                              iconSize: 28,
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.sentiment_neutral,
+                                  color: Colors.orange),
+                              onPressed: () {
+                                _updateSrsStatus(card.id, 'medium');
+                              },
+                              tooltip: 'Medium',
+                              iconSize: 28,
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.sentiment_very_satisfied,
+                                  color: Colors.green),
+                              onPressed: () {
+                                _updateSrsStatus(card.id, 'easy');
+                              },
+                              tooltip: 'Easy',
+                              iconSize: 28,
+                            ),
+                          ],
+                        ),
+                      ],
                       // TTS Audio Button
                       if (isTtsEnabled)
                         IconButton(
@@ -3103,5 +3356,358 @@ class _StudyPageState extends ConsumerState<StudyPage> {
         );
       },
     );
+  }
+
+  // ==================== SRS FUNCTIONS ====================
+
+  Future<void> _updateSrsStatus(String cardId, String difficulty) async {
+    try {
+      print('🔄 Updating SRS for card $cardId with difficulty: $difficulty');
+
+      final localDb = LocalDatabase();
+      final allCards = await localDb.getAllFlashcards();
+      final cardIndex = allCards.indexWhere((c) => c.id == cardId);
+
+      if (cardIndex == -1) {
+        print('❌ Card not found');
+        return;
+      }
+
+      final card = allCards[cardIndex];
+
+      // SM-2 Algorithm
+      // difficulty: 'easy', 'medium', 'hard'
+      double quality = 0;
+      switch (difficulty) {
+        case 'easy':
+          quality = 5;
+          break;
+        case 'medium':
+          quality = 3;
+          break;
+        case 'hard':
+          quality = 1;
+          break;
+        default:
+          quality = 3;
+      }
+
+      // Tính toán interval và ease factor
+      int newInterval = card.interval ?? 1;
+      double newEaseFactor = card.easeFactor ?? 2.5;
+
+      // Cập nhật ease factor
+      newEaseFactor =
+          newEaseFactor + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02));
+      if (newEaseFactor < 1.3) newEaseFactor = 1.3;
+
+      // Cập nhật interval
+      if (quality >= 3) {
+        // Trả lời đúng
+        if (newInterval == 1) {
+          newInterval = 1;
+        } else if (newInterval == 2) {
+          newInterval = 6;
+        } else {
+          newInterval = (newInterval * newEaseFactor).round();
+        }
+      } else {
+        // Trả lời sai
+        newInterval = 1;
+        newEaseFactor = 2.5;
+      }
+
+      // Tính ngày review tiếp theo
+      final now = DateTime.now();
+      final nextReview = now.add(Duration(days: newInterval));
+
+      // Cập nhật card
+      final updatedCard = card.copyWith(
+        interval: newInterval,
+        easeFactor: newEaseFactor,
+        nextReview: nextReview,
+        studyStatus: _getStudyStatusFromQuality(quality),
+      );
+
+      await localDb.updateFlashcard(updatedCard);
+      print(
+          '✅ SRS updated: interval=$newInterval, ease=$newEaseFactor, next=$nextReview');
+
+      // Cập nhật danh sách hiển thị
+      final displayIndex = _displayCards.indexWhere((c) => c.id == cardId);
+      if (displayIndex != -1) {
+        setState(() {
+          _displayCards[displayIndex] = updatedCard;
+        });
+      }
+
+      // Cập nhật review queue
+      await _loadReviewQueue();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✅ SRS updated: ${_getDifficultyLabel(difficulty)}'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 1),
+          ),
+        );
+      }
+    } catch (e) {
+      print('❌ Error updating SRS: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('❌ Failed to update SRS'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  String _getStudyStatusFromQuality(double quality) {
+    if (quality >= 4) return 'mastered';
+    if (quality >= 3) return 'reviewing';
+    if (quality >= 2) return 'learning';
+    return 'new';
+  }
+
+  String _getDifficultyLabel(String difficulty) {
+    switch (difficulty) {
+      case 'easy':
+        return '🟢 Easy';
+      case 'medium':
+        return '🟡 Medium';
+      case 'hard':
+        return '🔴 Hard';
+      default:
+        return difficulty;
+    }
+  }
+
+  Future<void> _loadReviewQueue() async {
+    try {
+      final localDb = LocalDatabase();
+      final allCards = await localDb.getAllFlashcards();
+      final now = DateTime.now();
+
+      // Lọc các card cần review (nextReview <= now)
+      final reviewCards = allCards
+          .where((c) => c.nextReview != null && c.nextReview!.isBefore(now))
+          .toList();
+
+      ref.read(reviewQueueProvider.notifier).state = reviewCards;
+      print('📚 Review queue: ${reviewCards.length} cards');
+    } catch (e) {
+      print('❌ Error loading review queue: $e');
+    }
+  }
+
+  void _showSrsDialog(Flashcard card) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.assessment, color: Colors.purple),
+              SizedBox(width: 8),
+              Text('How well did you know?'),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Rate your recall of this card:',
+                style: TextStyle(fontSize: 16),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _buildSrsButton(
+                    label: 'Hard',
+                    icon: Icons.sentiment_very_dissatisfied,
+                    color: Colors.red,
+                    onTap: () {
+                      Navigator.pop(context);
+                      _updateSrsStatus(card.id, 'hard');
+                    },
+                  ),
+                  _buildSrsButton(
+                    label: 'Medium',
+                    icon: Icons.sentiment_neutral,
+                    color: Colors.orange,
+                    onTap: () {
+                      Navigator.pop(context);
+                      _updateSrsStatus(card.id, 'medium');
+                    },
+                  ),
+                  _buildSrsButton(
+                    label: 'Easy',
+                    icon: Icons.sentiment_very_satisfied,
+                    color: Colors.green,
+                    onTap: () {
+                      Navigator.pop(context);
+                      _updateSrsStatus(card.id, 'easy');
+                    },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Current SRS: ${_getSrsInfo(card)}',
+                style: const TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Skip'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  String _getSrsInfo(Flashcard card) {
+    final interval = card.interval ?? 1;
+    final ease = card.easeFactor ?? 2.5;
+    final nextReview = card.nextReview != null
+        ? '${card.nextReview!.difference(DateTime.now()).inDays}d'
+        : 'N/A';
+    return 'Interval: ${interval}d | Ease: ${ease.toStringAsFixed(2)} | Next: $nextReview';
+  }
+
+  Widget _buildSrsButton({
+    required String label,
+    required IconData icon,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color, width: 2),
+        ),
+        child: Column(
+          children: [
+            Icon(icon, color: color, size: 32),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showReviewQueue() {
+    final reviewCards = ref.read(reviewQueueProvider);
+
+    if (reviewCards.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('🎉 No cards need review!'),
+          backgroundColor: Colors.green,
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Row(
+            children: [
+              const Icon(Icons.assignment, color: Colors.orange),
+              const SizedBox(width: 8),
+              Text('📚 Review Queue (${reviewCards.length})'),
+            ],
+          ),
+          content: SizedBox(
+            width: double.maxFinite,
+            height: MediaQuery.of(context).size.height * 0.5,
+            child: ListView.builder(
+              itemCount: reviewCards.length,
+              itemBuilder: (context, index) {
+                final card = reviewCards[index];
+                final days = card.nextReview != null
+                    ? card.nextReview!.difference(DateTime.now()).inDays
+                    : 0;
+                return ListTile(
+                  title: Text(card.vietnamese),
+                  subtitle: Text(
+                    '${card.english ?? ''} | ${card.jpLevel ?? 'N/A'}',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  trailing: Text(
+                    '${days.abs()}d ago',
+                    style: TextStyle(
+                      color: Colors.red.shade300,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  onTap: () {
+                    Navigator.pop(context);
+                    // Đưa đến card này trong study
+                    final indexInDisplay =
+                        _displayCards.indexWhere((c) => c.id == card.id);
+                    if (indexInDisplay != -1) {
+                      _pageController.jumpToPage(indexInDisplay);
+                    }
+                  },
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _toggleSrs(bool value) {
+    final settings = ref.read(srsSettingsProvider);
+    settings['enabled'] = value;
+    ref.read(srsSettingsProvider.notifier).state = settings;
+
+    if (value) {
+      _loadReviewQueue();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('🧠 SRS enabled'),
+          duration: Duration(seconds: 1),
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('⏹️ SRS disabled'),
+          duration: Duration(seconds: 1),
+        ),
+      );
+    }
   }
 }
