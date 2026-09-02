@@ -51,6 +51,26 @@ final fontSizeProvider = StateProvider<Map<String, double>>((ref) => {
 final textAlignmentProvider =
     StateProvider<TextAlign>((ref) => TextAlign.center);
 
+// Auto-flip providers
+final autoFlipEnabledProvider = StateProvider<bool>((ref) => false);
+final autoFlipFrontDurationProvider =
+    StateProvider<double>((ref) => 3.0); // Thời gian mặt trước
+final autoFlipBackDurationProvider =
+    StateProvider<double>((ref) => 2.0); // Thời gian mặt sau
+
+// TTS providers
+final ttsEnabledProvider = StateProvider<bool>((ref) => true);
+final ttsAutoPlayProvider = StateProvider<bool>((ref) => false);
+final ttsLanguageProvider = StateProvider<String>((ref) => 'ja');
+
+// SRS providers
+final srsEnabledProvider = StateProvider<bool>((ref) => false);
+final reviewQueueProvider = StateProvider<List<Flashcard>>((ref) => []);
+
+// Status indicators
+final isAutoFlippingProvider = StateProvider<bool>((ref) => false);
+final isTtsPlayingProvider = StateProvider<bool>((ref) => false);
+
 final autoFlipProvider = StateProvider<Map<String, dynamic>>((ref) => {
       'enabled': false,
       'duration': 3.0,
@@ -67,17 +87,9 @@ final srsSettingsProvider = StateProvider<Map<String, dynamic>>((ref) => {
       'showReviewQueue': true,
     });
 
-final reviewQueueProvider = StateProvider<List<Flashcard>>((ref) => []);
-final isAutoFlippingProvider = StateProvider<bool>((ref) => false);
-final isTtsPlayingProvider = StateProvider<bool>((ref) => false);
-
 // ==================== AUTO-FLIP PROVIDER ====================
 
 final autoFlipTimerProvider = StateProvider<Timer?>((ref) => null);
-
-// ==================== TTS PROVIDER ====================
-
-final ttsLanguageProvider = StateProvider<String>((ref) => 'ja');
 
 // ==================== STUDY PAGE ====================
 
@@ -128,7 +140,8 @@ class _StudyPageState extends ConsumerState<StudyPage> {
   // Auto-flip
   Timer? _autoFlipTimer;
   bool _isAutoFlipping = false;
-  double _autoFlipDuration = 3.0;
+  double _autoFlipFrontDuration = 3.0;
+  double _autoFlipBackDuration = 2.0;
   // TTS
   final FlutterTts _flutterTts = FlutterTts();
   final AudioPlayer _audioPlayer = AudioPlayer();
@@ -173,6 +186,10 @@ class _StudyPageState extends ConsumerState<StudyPage> {
     _loadFontSizesFromPrefs();
     _loadTextAlignmentFromPrefs();
     _initTts();
+
+    // Load auto-flip settings
+    _autoFlipFrontDuration = ref.read(autoFlipFrontDurationProvider);
+    _autoFlipBackDuration = ref.read(autoFlipBackDurationProvider);
 
     // 5. Load dữ liệu từ database (sau khi đã khởi tạo xong)
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -427,7 +444,7 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                   const Icon(Icons.play_circle, size: 16, color: Colors.green),
                   const SizedBox(width: 8),
                   Text(
-                    '⏱️ Auto-flip: ${_autoFlipDuration.toStringAsFixed(1)}s',
+                    '⏱️ Auto-flip: front ${_autoFlipFrontDuration.toStringAsFixed(1)}s | back ${_autoFlipBackDuration.toStringAsFixed(1)}s',
                     style: const TextStyle(fontSize: 14, color: Colors.green),
                   ),
                   const SizedBox(width: 8),
@@ -478,16 +495,15 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                     });
 
                     // Auto-play TTS khi chuyển trang
-                    final ttsSettings = ref.read(ttsProvider);
-                    final autoPlay = ttsSettings['autoPlay'] ?? false;
-                    final enabled = ttsSettings['enabled'] ?? true;
-                    final language = ttsSettings['language'] ?? 'ja';
+                    final ttsEnabled = ref.read(ttsEnabledProvider);
+                    final ttsAutoPlay = ref.read(ttsAutoPlayProvider);
+                    final ttsLanguage = ref.read(ttsLanguageProvider);
 
-                    if (autoPlay && enabled && _currentCards.isNotEmpty) {
+                    if (ttsEnabled && ttsAutoPlay && _currentCards.isNotEmpty) {
                       // Chờ một chút để card load xong
                       Future.delayed(const Duration(milliseconds: 500), () {
                         if (mounted && _currentCards.isNotEmpty) {
-                          _speakCard(_currentCards[_currentIndex], language);
+                          _speakCard(_currentCards[_currentIndex], ttsLanguage);
                         }
                       });
                     }
@@ -577,14 +593,13 @@ class _StudyPageState extends ConsumerState<StudyPage> {
 
   PreferredSizeWidget _buildAppBar(int totalCards) {
     final isAutoFlipping = ref.watch(isAutoFlippingProvider);
-    final ttsSettings = ref.watch(ttsProvider);
-    final isTtsEnabled = ttsSettings['enabled'] ?? true;
+    final isTtsEnabled = ref.watch(ttsEnabledProvider);
 
     return AppBar(
       title: const Text('Study'),
       backgroundColor: Theme.of(context).colorScheme.inversePrimary,
       actions: [
-        // Auto-flip toggle (ngoài)
+        // Auto-flip toggle
         IconButton(
           icon: Stack(
             alignment: Alignment.center,
@@ -609,21 +624,12 @@ class _StudyPageState extends ConsumerState<StudyPage> {
             ],
           ),
           onPressed: () {
-            // Toggle auto-flip nhanh
-            final settings = ref.read(autoFlipProvider);
-            final enabled = settings['enabled'] ?? false;
-            final newEnabled = !enabled;
-            settings['enabled'] = newEnabled;
-            ref.read(autoFlipProvider.notifier).state = settings;
-            if (newEnabled) {
-              _startAutoFlip();
-            } else {
-              _stopAutoFlip();
-            }
+            final current = ref.read(autoFlipEnabledProvider);
+            _toggleAutoFlip(!current);
           },
           tooltip: 'Toggle Auto-flip',
         ),
-        // Settings button (gộp tất cả)
+        // Settings button
         IconButton(
           icon: const Icon(Icons.settings),
           onPressed: () => _showAllSettingsDialog(context),
@@ -729,56 +735,66 @@ class _StudyPageState extends ConsumerState<StudyPage> {
   // ==================== AUTO-FLIP TAB ====================
 
   Widget _buildAutoFlipTab() {
-    final settings = ref.watch(autoFlipProvider);
-    final enabled = settings['enabled'] ?? false;
-    final duration = settings['duration'] ?? 3.0;
+    final enabled = ref.watch(autoFlipEnabledProvider);
+    final frontDuration = ref.watch(autoFlipFrontDurationProvider);
+    final backDuration = ref.watch(autoFlipBackDurationProvider);
 
     return StatefulBuilder(
       builder: (context, setState) {
-        bool tempEnabled = enabled;
-        double tempDuration = duration;
-
         return SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Enable/Disable
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(
-                    'Enable Auto-Flip',
-                    style: TextStyle(fontSize: 16),
-                  ),
-                  Switch(
-                    value: tempEnabled,
-                    onChanged: (value) {
-                      setState(() {
-                        tempEnabled = value;
-                      });
-                      final newSettings = {
-                        'enabled': tempEnabled,
-                        'duration': tempDuration,
-                      };
-                      ref.read(autoFlipProvider.notifier).state = newSettings;
-                      if (tempEnabled) {
-                        _startAutoFlip();
-                      } else {
-                        _stopAutoFlip();
-                      }
-                    },
-                  ),
-                ],
+              // Enable/Disable - SỬA LỖI LAG
+              Container(
+                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                decoration: BoxDecoration(
+                  color: enabled ? Colors.blue.shade50 : Colors.grey.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          enabled ? Icons.play_circle : Icons.pause_circle,
+                          color: enabled ? Colors.blue : Colors.grey,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          enabled ? 'Auto-Flip: ON' : 'Auto-Flip: OFF',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: enabled ? Colors.blue : Colors.grey,
+                          ),
+                        ),
+                      ],
+                    ),
+                    Switch(
+                      value: enabled,
+                      onChanged: (value) {
+                        setState(() {
+                          ref.read(autoFlipEnabledProvider.notifier).state =
+                              value;
+                          _toggleAutoFlip(value);
+                        });
+                      },
+                      activeColor: Colors.blue,
+                    ),
+                  ],
+                ),
               ),
+
               const SizedBox(height: 16),
 
-              // Duration slider
-              if (tempEnabled) ...[
+              // Front duration
+              if (enabled) ...[
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     const Text(
-                      'Flip Interval:',
+                      '⏱️ Front Side Duration:',
                       style: TextStyle(fontWeight: FontWeight.w500),
                     ),
                     Container(
@@ -789,7 +805,7 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Text(
-                        '${tempDuration.toStringAsFixed(1)}s',
+                        '${frontDuration.toStringAsFixed(1)}s',
                         style: const TextStyle(
                           fontWeight: FontWeight.bold,
                           color: Colors.blue,
@@ -799,44 +815,87 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                   ],
                 ),
                 Slider(
-                  value: tempDuration,
-                  min: 0.5,
-                  max: 10.0,
-                  divisions: 19,
-                  label: '${tempDuration.toStringAsFixed(1)}s',
+                  value: frontDuration,
+                  min: 1.0,
+                  max: 15.0,
+                  divisions: 28,
+                  label: '${frontDuration.toStringAsFixed(1)}s',
                   onChanged: (value) {
                     setState(() {
-                      tempDuration = value;
+                      ref.read(autoFlipFrontDurationProvider.notifier).state =
+                          value;
+                      if (enabled) {
+                        _startAutoFlip();
+                      }
                     });
-                    final newSettings = {
-                      'enabled': tempEnabled,
-                      'duration': tempDuration,
-                    };
-                    ref.read(autoFlipProvider.notifier).state = newSettings;
-                    if (tempEnabled) {
-                      _startAutoFlip();
-                    }
                   },
                   activeColor: Colors.blue,
                 ),
+
+                const SizedBox(height: 16),
+
+                // Back duration
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(
-                      '0.5s',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey.shade600,
-                      ),
+                    const Text(
+                      '⏱️ Back Side Duration:',
+                      style: TextStyle(fontWeight: FontWeight.w500),
                     ),
-                    Text(
-                      '10s',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey.shade600,
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.shade50,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        '${backDuration.toStringAsFixed(1)}s',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.orange,
+                        ),
                       ),
                     ),
                   ],
+                ),
+                Slider(
+                  value: backDuration,
+                  min: 0.5,
+                  max: 10.0,
+                  divisions: 19,
+                  label: '${backDuration.toStringAsFixed(1)}s',
+                  onChanged: (value) {
+                    setState(() {
+                      ref.read(autoFlipBackDurationProvider.notifier).state =
+                          value;
+                      if (enabled) {
+                        _startAutoFlip();
+                      }
+                    });
+                  },
+                  activeColor: Colors.orange,
+                ),
+
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.info_outline, size: 16, color: Colors.blue),
+                      const SizedBox(width: 8),
+                      const Expanded(
+                        child: Text(
+                          'Front: time to view before flipping. Back: time to view before moving to next card.',
+                          style: TextStyle(fontSize: 12, color: Colors.blue),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ],
@@ -849,45 +908,55 @@ class _StudyPageState extends ConsumerState<StudyPage> {
 // ==================== TTS TAB ====================
 
   Widget _buildTtsTab() {
-    final settings = ref.watch(ttsProvider);
-    final enabled = settings['enabled'] ?? true;
-    final autoPlay = settings['autoPlay'] ?? false;
-    final currentLanguage = settings['language'] ?? 'ja';
+    final enabled = ref.watch(ttsEnabledProvider);
+    final autoPlay = ref.watch(ttsAutoPlayProvider);
+    final currentLanguage = ref.watch(ttsLanguageProvider);
 
     return StatefulBuilder(
       builder: (context, setState) {
-        bool tempEnabled = enabled;
-        bool tempAutoPlay = autoPlay;
-        String tempLanguage = currentLanguage;
-
         return SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Enable/Disable
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(
-                    'Enable TTS',
-                    style: TextStyle(fontSize: 16),
-                  ),
-                  Switch(
-                    value: tempEnabled,
-                    onChanged: (value) {
-                      setState(() {
-                        tempEnabled = value;
-                      });
-                      final newSettings = {
-                        'enabled': tempEnabled,
-                        'autoPlay': tempAutoPlay,
-                        'language': tempLanguage,
-                      };
-                      ref.read(ttsProvider.notifier).state = newSettings;
-                    },
-                  ),
-                ],
+              // Enable/Disable - SỬA LỖI LAG
+              Container(
+                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                decoration: BoxDecoration(
+                  color: enabled ? Colors.green.shade50 : Colors.grey.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          enabled ? Icons.volume_up : Icons.volume_off,
+                          color: enabled ? Colors.green : Colors.grey,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          enabled ? 'TTS: ON' : 'TTS: OFF',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: enabled ? Colors.green : Colors.grey,
+                          ),
+                        ),
+                      ],
+                    ),
+                    Switch(
+                      value: enabled,
+                      onChanged: (value) {
+                        setState(() {
+                          ref.read(ttsEnabledProvider.notifier).state = value;
+                        });
+                      },
+                      activeColor: Colors.green,
+                    ),
+                  ],
+                ),
               ),
+
               const SizedBox(height: 12),
 
               // Auto-play
@@ -899,28 +968,25 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                     style: TextStyle(fontSize: 16),
                   ),
                   Switch(
-                    value: tempAutoPlay,
-                    onChanged: tempEnabled
+                    value: autoPlay,
+                    onChanged: enabled
                         ? (value) {
                             setState(() {
-                              tempAutoPlay = value;
+                              ref.read(ttsAutoPlayProvider.notifier).state =
+                                  value;
                             });
-                            final newSettings = {
-                              'enabled': tempEnabled,
-                              'autoPlay': tempAutoPlay,
-                              'language': tempLanguage,
-                            };
-                            ref.read(ttsProvider.notifier).state = newSettings;
                           }
                         : null,
+                    activeColor: Colors.green,
                   ),
                 ],
               ),
+
               const SizedBox(height: 12),
 
               // Language selector
               DropdownButtonFormField<String>(
-                value: tempLanguage,
+                value: currentLanguage,
                 decoration: const InputDecoration(
                   labelText: 'Language',
                   border: OutlineInputBorder(),
@@ -931,23 +997,14 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                     child: Text(entry.value),
                   );
                 }).toList(),
-                onChanged: tempEnabled
+                onChanged: enabled
                     ? (value) {
                         setState(() {
-                          tempLanguage = value!;
+                          ref.read(ttsLanguageProvider.notifier).state = value!;
+                          if (_currentCards.isNotEmpty) {
+                            _speakCard(_currentCards[_currentIndex], value);
+                          }
                         });
-                        final newSettings = {
-                          'enabled': tempEnabled,
-                          'autoPlay': tempAutoPlay,
-                          'language': tempLanguage,
-                        };
-                        ref.read(ttsProvider.notifier).state = newSettings;
-
-                        // Test speak với ngôn ngữ mới
-                        if (_currentCards.isNotEmpty) {
-                          _speakCard(
-                              _currentCards[_currentIndex], tempLanguage);
-                        }
                       }
                     : null,
               ),
@@ -1303,8 +1360,7 @@ class _StudyPageState extends ConsumerState<StudyPage> {
   // ==================== BOTTOM CONTROLS ====================
 
   Widget _buildBottomControls() {
-    final srsSettings = ref.watch(srsSettingsProvider);
-    final isSrsEnabled = srsSettings['enabled'] ?? false;
+    final isSrsEnabled = ref.watch(srsEnabledProvider);
     final reviewCards = ref.watch(reviewQueueProvider);
 
     return Container(
@@ -1333,7 +1389,25 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                   const SizedBox(width: 4),
                   Switch(
                     value: isSrsEnabled,
-                    onChanged: _toggleSrs,
+                    onChanged: (value) {
+                      ref.read(srsEnabledProvider.notifier).state = value;
+                      if (value) {
+                        _loadReviewQueue();
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('🧠 SRS enabled'),
+                            duration: Duration(seconds: 1),
+                          ),
+                        );
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('⏹️ SRS disabled'),
+                            duration: Duration(seconds: 1),
+                          ),
+                        );
+                      }
+                    },
                     activeColor: Colors.purple,
                   ),
                 ],
@@ -1651,13 +1725,10 @@ class _StudyPageState extends ConsumerState<StudyPage> {
 
   Widget _buildBackCard(Flashcard card) {
     final settings = ref.watch(studySettingsProvider);
-    final ttsSettings = ref.watch(ttsProvider);
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
-    final isTtsEnabled = ttsSettings['enabled'] ?? true;
-    final currentLanguage = ttsSettings['language'] ?? 'ja';
-    // Thêm vào đầu hàm _buildBackCard
-    final srsSettings = ref.watch(srsSettingsProvider);
-    final isSrsEnabled = srsSettings['enabled'] ?? false;
+    final isTtsEnabled = ref.watch(ttsEnabledProvider);
+    final currentLanguage = ref.watch(ttsLanguageProvider);
+    final isSrsEnabled = ref.watch(srsEnabledProvider);
 
     List<String> backFields = [];
     final backData = settings['backFields'];
@@ -1819,7 +1890,7 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                           icon: Icon(
                             _isTtsPlaying ? Icons.stop : Icons.volume_up,
                             size: 20,
-                            color: _isTtsPlaying ? Colors.red : Colors.green,
+                            color: _isTtsPlaying ? Colors.red : Colors.blue,
                           ),
                           onPressed: () {
                             if (_isTtsPlaying) {
@@ -2808,68 +2879,150 @@ class _StudyPageState extends ConsumerState<StudyPage> {
   // ==================== AUTO-FLIP FUNCTIONS ====================
 
   void _startAutoFlip() {
-    _stopAutoFlip(); // Dừng timer cũ nếu có
+    _stopAutoFlip();
 
     if (!mounted) return;
 
-    final settings = ref.read(autoFlipProvider);
-    final enabled = settings['enabled'] ?? false;
-    final duration = settings['duration'] ?? 3.0;
-
+    final enabled = ref.read(autoFlipEnabledProvider);
     if (!enabled) {
       print('⚠️ Auto-flip is disabled');
       return;
     }
 
-    print('▶️ Starting auto-flip with duration: ${duration}s');
+    final frontDuration = ref.read(autoFlipFrontDurationProvider);
+    final backDuration = ref.read(autoFlipBackDurationProvider);
 
-    _autoFlipDuration = duration;
-    _isAutoFlipping = true;
+    print(
+        '▶️ Starting auto-flip: front=${frontDuration}s, back=${backDuration}s');
+
     ref.read(isAutoFlippingProvider.notifier).state = true;
+    _isAutoFlipping = true;
+    _autoFlipFrontDuration = frontDuration;
+    _autoFlipBackDuration = backDuration;
+
+    // State machine: 0 = front, 1 = back
+    int side = 0; // 0: front, 1: back
+    double currentDuration = frontDuration;
 
     _autoFlipTimer = Timer.periodic(
-      Duration(milliseconds: (_autoFlipDuration * 1000).round()),
+      Duration(milliseconds: (currentDuration * 1000).round()),
       (timer) {
         if (!mounted) {
           timer.cancel();
           return;
         }
 
-        print('🔄 Auto-flip triggered for card $_currentIndex');
-
-        // Lật thẻ hiện tại
         final controller = _controllers[_currentIndex];
-        if (controller != null) {
+        if (controller == null) return;
+
+        if (side == 0) {
+          // Đang ở mặt trước -> lật sang mặt sau
+          print('🔄 Auto-flip: Front -> Back');
           controller.toggleCard();
-        }
+          side = 1;
+          currentDuration = backDuration;
+          // Reset timer với duration mới
+          timer.cancel();
+          _autoFlipTimer = Timer.periodic(
+            Duration(milliseconds: (currentDuration * 1000).round()),
+            (newTimer) {
+              if (!mounted) {
+                newTimer.cancel();
+                return;
+              }
+              // Lật từ back -> front và chuyển bài
+              print('🔄 Auto-flip: Back -> Front, moving to next card');
+              final currentController = _controllers[_currentIndex];
+              if (currentController != null) {
+                currentController.toggleCard();
+              }
+              side = 0;
+              currentDuration = frontDuration;
 
-        // Sau khi lật, chờ 0.5s rồi chuyển sang thẻ tiếp theo
-        Future.delayed(const Duration(milliseconds: 500), () {
-          if (!mounted) return;
+              // Chuyển sang bài tiếp theo
+              final totalCards = _currentCards.length;
+              if (_currentIndex < totalCards - 1) {
+                _pageController.nextPage(
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeInOut,
+                );
+              } else {
+                print('🏁 Auto-flip finished (end of cards)');
+                _stopAutoFlip();
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('🏁 Auto-flip completed all cards'),
+                      backgroundColor: Colors.blue,
+                      duration: Duration(seconds: 2),
+                    ),
+                  );
+                }
+              }
 
-          final totalCards = _currentCards.length;
-          if (_currentIndex < totalCards - 1) {
-            _pageController.nextPage(
-              duration: const Duration(milliseconds: 300),
-              curve: Curves.easeInOut,
-            );
-          } else {
-            // Hết thẻ, dừng auto-flip
-            print('🏁 Auto-flip finished (end of cards)');
-            _stopAutoFlip();
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('🏁 Auto-flip completed all cards'),
-                  backgroundColor: Colors.blue,
-                  duration: Duration(seconds: 2),
-                ),
+              // Reset timer cho front side
+              newTimer.cancel();
+              _autoFlipTimer = Timer.periodic(
+                Duration(milliseconds: (frontDuration * 1000).round()),
+                (frontTimer) {
+                  // Logic cho front side sẽ được xử lý ở vòng lặp tiếp theo
+                  // Cần truyền frontTimer vào để tiếp tục chu trình
+                  _handleAutoFlipStep(frontTimer);
+                },
               );
-            }
-          }
-        });
+            },
+          );
+        }
       },
     );
+  }
+
+  void _handleAutoFlipStep(Timer timer) {
+    if (!mounted) {
+      timer.cancel();
+      return;
+    }
+
+    final controller = _controllers[_currentIndex];
+    if (controller == null) return;
+
+    // Lật từ front sang back
+    print('🔄 Auto-flip: Front -> Back (step)');
+    controller.toggleCard();
+
+    final backDuration = ref.read(autoFlipBackDurationProvider);
+
+    // Sau backDuration, lật lại và chuyển bài
+    timer.cancel();
+    Timer(Duration(milliseconds: (backDuration * 1000).round()), () {
+      if (!mounted) return;
+
+      final currentController = _controllers[_currentIndex];
+      if (currentController != null) {
+        currentController.toggleCard();
+      }
+
+      // Chuyển bài
+      final totalCards = _currentCards.length;
+      if (_currentIndex < totalCards - 1) {
+        _pageController.nextPage(
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeInOut,
+        );
+      } else {
+        print('🏁 Auto-flip finished');
+        _stopAutoFlip();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('🏁 Auto-flip completed all cards'),
+              backgroundColor: Colors.blue,
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      }
+    });
   }
 
   void _stopAutoFlip() {
@@ -2880,10 +3033,7 @@ class _StudyPageState extends ConsumerState<StudyPage> {
   }
 
   void _toggleAutoFlip(bool value) {
-    final settings = ref.read(autoFlipProvider);
-    settings['enabled'] = value;
-    ref.read(autoFlipProvider.notifier).state = settings;
-
+    ref.read(autoFlipEnabledProvider.notifier).state = value;
     if (value) {
       _startAutoFlip();
     } else {
@@ -2895,7 +3045,8 @@ class _StudyPageState extends ConsumerState<StudyPage> {
     final settings = ref.read(autoFlipProvider);
     settings['duration'] = value;
     ref.read(autoFlipProvider.notifier).state = settings;
-    _autoFlipDuration = value;
+    _autoFlipFrontDuration = value;
+    _autoFlipBackDuration = value;
 
     // Nếu đang chạy, restart timer
     if (_isAutoFlipping) {
@@ -3141,7 +3292,6 @@ class _StudyPageState extends ConsumerState<StudyPage> {
     try {
       if (text.isEmpty) return;
 
-      // Dừng phát hiện tại
       await _stopTts();
 
       setState(() {
@@ -3149,18 +3299,14 @@ class _StudyPageState extends ConsumerState<StudyPage> {
       });
       ref.read(isTtsPlayingProvider.notifier).state = true;
 
-      // Cập nhật ngôn ngữ - QUAN TRỌNG: Phải set language trước khi speak
       final langCode = _languageCodes[language] ?? 'ja-JP';
       print('🔊 Setting language to: $langCode');
       await _flutterTts.setLanguage(langCode);
       _currentLanguage = language;
 
-      // Thêm chút delay để language được set
       await Future.delayed(const Duration(milliseconds: 100));
 
       print('🔊 Speaking: "$text" in $langCode');
-
-      // Phát text
       final result = await _flutterTts.speak(text);
 
       if (result == 1) {
@@ -3169,7 +3315,6 @@ class _StudyPageState extends ConsumerState<StudyPage> {
         print('⚠️ TTS speak returned: $result');
       }
 
-      // Lắng nghe sự kiện hoàn thành
       _flutterTts.setCompletionHandler(() {
         setState(() {
           _isTtsPlaying = false;
@@ -3232,9 +3377,9 @@ class _StudyPageState extends ConsumerState<StudyPage> {
       textToSpeak = card.vietnamese;
     }
 
-    // Cập nhật language trước khi speak
-    await _flutterTts.setLanguage(_languageCodes[language] ?? 'ja-JP');
-    _currentLanguage = language;
+    // Kiểm tra xem TTS có được bật không
+    final isEnabled = ref.read(ttsEnabledProvider);
+    if (!isEnabled) return;
 
     await _speakText(textToSpeak, language);
   }
