@@ -175,13 +175,23 @@ class _StudyPageState extends ConsumerState<StudyPage> {
   // ==================== GET CURRENT CARDS ====================
 
   List<Flashcard> get _currentCards {
-    // Lọc theo study status nếu không phải "All"
-    if (_statusFilters.values.every((v) => v == true)) {
-      // Tất cả đều được chọn -> hiển thị tất cả
+    // Kiểm tra xem có status nào được chọn không
+    final hasAnySelected = _statusFilters.values.any((v) => v == true);
+
+    // Nếu không có status nào được chọn -> hiển thị tất cả (mặc định)
+    if (!hasAnySelected) {
+      // Reset tất cả về true (chọn tất cả)
+      _statusFilters.updateAll((key, value) => true);
       if (_isShuffled) {
-        final shuffled = List<Flashcard>.from(_displayCards);
-        shuffled.shuffle();
-        return shuffled;
+        return (List<Flashcard>.from(_displayCards)..shuffle());
+      }
+      return _displayCards;
+    }
+
+    // Kiểm tra nếu tất cả đều được chọn -> hiển thị tất cả
+    if (_statusFilters.values.every((v) => v == true)) {
+      if (_isShuffled) {
+        return (List<Flashcard>.from(_displayCards)..shuffle());
       }
       return _displayCards;
     }
@@ -199,9 +209,7 @@ class _StudyPageState extends ConsumerState<StudyPage> {
         .toList();
 
     if (_isShuffled) {
-      final shuffled = List<Flashcard>.from(filtered);
-      shuffled.shuffle();
-      return shuffled;
+      return (List<Flashcard>.from(filtered)..shuffle());
     }
     return filtered;
   }
@@ -496,7 +504,7 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                     final allSelected =
                         _statusFilters.values.every((v) => v == true);
                     if (allSelected) {
-                      // Nếu đang all, bỏ chọn tất cả
+                      // Nếu đang all, bỏ chọn tất cả (sẽ tự động reset về all trong getter)
                       _statusFilters.updateAll((key, value) => false);
                     } else {
                       // Nếu không all, chọn tất cả
