@@ -1,5 +1,7 @@
 // lib/features/study/presentation/pages/study_page.dart
 
+import 'dart:async';
+
 import 'package:flip_card/flip_card_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -47,6 +49,16 @@ final fontSizeProvider = StateProvider<Map<String, double>>((ref) => {
 final textAlignmentProvider =
     StateProvider<TextAlign>((ref) => TextAlign.center);
 
+// ==================== AUTO-FLIP PROVIDER ====================
+
+final autoFlipProvider = StateProvider<Map<String, dynamic>>((ref) => {
+      'enabled': false,
+      'duration': 3.0, // seconds
+    });
+
+final autoFlipTimerProvider = StateProvider<Timer?>((ref) => null);
+final isAutoFlippingProvider = StateProvider<bool>((ref) => false);
+
 // ==================== STUDY PAGE ====================
 
 class StudyPage extends ConsumerStatefulWidget {
@@ -93,6 +105,11 @@ class _StudyPageState extends ConsumerState<StudyPage> {
     'mastered': '⭐ Mastered',
   };
 
+  // Auto-flip
+  Timer? _autoFlipTimer;
+  bool _isAutoFlipping = false;
+  double _autoFlipDuration = 3.0;
+
   // ==================== INIT ====================
 
   @override
@@ -125,6 +142,7 @@ class _StudyPageState extends ConsumerState<StudyPage> {
   @override
   void dispose() {
     _pageController.dispose();
+    _stopAutoFlip();
     super.dispose();
   }
 
@@ -336,6 +354,38 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                 ],
               ),
             ),
+          if (_isAutoFlipping)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              color: Colors.green.shade50,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.play_circle, size: 16, color: Colors.green),
+                  const SizedBox(width: 8),
+                  Text(
+                    '⏱️ Auto-flip: ${_autoFlipDuration.toStringAsFixed(1)}s',
+                    style: const TextStyle(fontSize: 14, color: Colors.green),
+                  ),
+                  const SizedBox(width: 8),
+                  GestureDetector(
+                    onTap: _stopAutoFlip,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.red.shade100,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Text(
+                        'Stop',
+                        style: TextStyle(fontSize: 12, color: Colors.red),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           // Filter info
           if (widget.flashcards.length > 0 &&
               _displayCards.length < widget.flashcards.length)
@@ -363,6 +413,10 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                     setState(() {
                       _currentIndex = index;
                     });
+                    // Reset auto-flip timer khi chuyển trang thủ công
+                    if (_isAutoFlipping) {
+                      _startAutoFlip();
+                    }
                   },
                   itemCount: totalCards,
                   itemBuilder: (context, index) {
@@ -443,10 +497,38 @@ class _StudyPageState extends ConsumerState<StudyPage> {
   // ==================== APP BAR ====================
 
   PreferredSizeWidget _buildAppBar(int totalCards) {
+    final isAutoFlipping = ref.watch(isAutoFlippingProvider);
     return AppBar(
       title: const Text('Study'),
       backgroundColor: Theme.of(context).colorScheme.inversePrimary,
       actions: [
+        // Auto-flip button
+        IconButton(
+          icon: Stack(
+            alignment: Alignment.center,
+            children: [
+              Icon(
+                isAutoFlipping ? Icons.play_circle : Icons.play_circle_outline,
+                color: isAutoFlipping ? Colors.green : Colors.grey,
+              ),
+              if (isAutoFlipping)
+                Positioned(
+                  top: 0,
+                  right: 0,
+                  child: Container(
+                    width: 8,
+                    height: 8,
+                    decoration: const BoxDecoration(
+                      color: Colors.green,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          onPressed: _showAutoFlipSettings,
+          tooltip: 'Auto-flip settings',
+        ),
         // Font size button
         IconButton(
           icon: const Icon(Icons.text_fields),
@@ -1843,5 +1925,335 @@ class _StudyPageState extends ConsumerState<StudyPage> {
     } catch (e) {
       print('❌ Error loading text alignment: $e');
     }
+  }
+
+  // ==================== AUTO-FLIP FUNCTIONS ====================
+
+  void _startAutoFlip() {
+    _stopAutoFlip(); // Dừng timer cũ nếu có
+
+    if (!mounted) return;
+
+    final settings = ref.read(autoFlipProvider);
+    final enabled = settings['enabled'] ?? false;
+    final duration = settings['duration'] ?? 3.0;
+
+    if (!enabled) {
+      print('⚠️ Auto-flip is disabled');
+      return;
+    }
+
+    print('▶️ Starting auto-flip with duration: ${duration}s');
+
+    _autoFlipDuration = duration;
+    _isAutoFlipping = true;
+    ref.read(isAutoFlippingProvider.notifier).state = true;
+
+    _autoFlipTimer = Timer.periodic(
+      Duration(milliseconds: (_autoFlipDuration * 1000).round()),
+      (timer) {
+        if (!mounted) {
+          timer.cancel();
+          return;
+        }
+
+        print('🔄 Auto-flip triggered for card $_currentIndex');
+
+        // Lật thẻ hiện tại
+        final controller = _controllers[_currentIndex];
+        if (controller != null) {
+          controller.toggleCard();
+        }
+
+        // Sau khi lật, chờ 0.5s rồi chuyển sang thẻ tiếp theo
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (!mounted) return;
+
+          final totalCards = _currentCards.length;
+          if (_currentIndex < totalCards - 1) {
+            _pageController.nextPage(
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeInOut,
+            );
+          } else {
+            // Hết thẻ, dừng auto-flip
+            print('🏁 Auto-flip finished (end of cards)');
+            _stopAutoFlip();
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('🏁 Auto-flip completed all cards'),
+                  backgroundColor: Colors.blue,
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            }
+          }
+        });
+      },
+    );
+  }
+
+  void _stopAutoFlip() {
+    _autoFlipTimer?.cancel();
+    _autoFlipTimer = null;
+    _isAutoFlipping = false;
+    ref.read(isAutoFlippingProvider.notifier).state = false;
+  }
+
+  void _toggleAutoFlip(bool value) {
+    final settings = ref.read(autoFlipProvider);
+    settings['enabled'] = value;
+    ref.read(autoFlipProvider.notifier).state = settings;
+
+    if (value) {
+      _startAutoFlip();
+    } else {
+      _stopAutoFlip();
+    }
+  }
+
+  void _updateAutoFlipDuration(double value) {
+    final settings = ref.read(autoFlipProvider);
+    settings['duration'] = value;
+    ref.read(autoFlipProvider.notifier).state = settings;
+    _autoFlipDuration = value;
+
+    // Nếu đang chạy, restart timer
+    if (_isAutoFlipping) {
+      _startAutoFlip();
+    }
+  }
+
+  void _showAutoFlipSettings() {
+    final settings = ref.read(autoFlipProvider);
+    final enabled = settings['enabled'] ?? false;
+    final duration = settings['duration'] ?? 3.0;
+
+    // Tạo bản sao để làm việc
+    bool tempEnabled = enabled;
+    double tempDuration = duration;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: const Row(
+                children: [
+                  Icon(Icons.timer, color: Colors.blue),
+                  SizedBox(width: 8),
+                  Text('Auto-Flip Settings'),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Enable/Disable
+                  Container(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    decoration: BoxDecoration(
+                      color: tempEnabled
+                          ? Colors.green.shade50
+                          : Colors.grey.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color:
+                            tempEnabled ? Colors.green : Colors.grey.shade300,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            const SizedBox(width: 8),
+                            Icon(
+                              tempEnabled
+                                  ? Icons.play_circle
+                                  : Icons.pause_circle,
+                              color: tempEnabled ? Colors.green : Colors.grey,
+                            ),
+                            const SizedBox(width: 12),
+                            Text(
+                              tempEnabled ? 'Auto-Flip: ON' : 'Auto-Flip: OFF',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: tempEnabled ? Colors.green : Colors.grey,
+                              ),
+                            ),
+                          ],
+                        ),
+                        Switch(
+                          value: tempEnabled,
+                          onChanged: (value) {
+                            setState(() {
+                              tempEnabled = value;
+                              // Nếu bật, tự động khởi động
+                              if (tempEnabled) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('🔄 Auto-flip enabled'),
+                                    duration: Duration(seconds: 1),
+                                  ),
+                                );
+                              }
+                            });
+                          },
+                          activeColor: Colors.green,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Duration slider
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Flip Interval:',
+                            style: TextStyle(fontWeight: FontWeight.w500),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: tempEnabled
+                                  ? Colors.blue.shade50
+                                  : Colors.grey.shade200,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              '${tempDuration.toStringAsFixed(1)}s',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: tempEnabled ? Colors.blue : Colors.grey,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      Slider(
+                        value: tempDuration,
+                        min: 0.5,
+                        max: 10.0,
+                        divisions: 19,
+                        label: '${tempDuration.toStringAsFixed(1)}s',
+                        onChanged: tempEnabled
+                            ? (value) {
+                                setState(() {
+                                  tempDuration = value;
+                                });
+                              }
+                            : null,
+                        activeColor: tempEnabled ? Colors.blue : Colors.grey,
+                        inactiveColor: Colors.grey.shade300,
+                      ),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            '0.5s',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: tempEnabled
+                                  ? Colors.grey.shade600
+                                  : Colors.grey.shade400,
+                            ),
+                          ),
+                          Text(
+                            '10s',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: tempEnabled
+                                  ? Colors.grey.shade600
+                                  : Colors.grey.shade400,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+
+                  if (tempEnabled) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Row(
+                        children: [
+                          Icon(Icons.info_outline,
+                              size: 16, color: Colors.blue),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Cards will auto-flip and advance to next card',
+                              style:
+                                  TextStyle(fontSize: 12, color: Colors.blue),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    // Lưu settings
+                    final newSettings = {
+                      'enabled': tempEnabled,
+                      'duration': tempDuration,
+                    };
+                    ref.read(autoFlipProvider.notifier).state = newSettings;
+
+                    if (tempEnabled) {
+                      _startAutoFlip();
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                              '✅ Auto-flip started (${tempDuration.toStringAsFixed(1)}s)'),
+                          backgroundColor: Colors.green,
+                          duration: const Duration(seconds: 2),
+                        ),
+                      );
+                    } else {
+                      _stopAutoFlip();
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('⏹️ Auto-flip stopped'),
+                          backgroundColor: Colors.orange,
+                          duration: const Duration(seconds: 1),
+                        ),
+                      );
+                    }
+
+                    Navigator.pop(context);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: tempEnabled ? Colors.green : Colors.grey,
+                  ),
+                  child: Text(tempEnabled ? 'Start Auto-Flip' : 'Apply'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 }
