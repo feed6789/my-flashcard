@@ -577,71 +577,11 @@ class _StudyPageState extends ConsumerState<StudyPage> {
       title: const Text('Study'),
       backgroundColor: Theme.of(context).colorScheme.inversePrimary,
       actions: [
-        // TTS button
-        IconButton(
-          icon: Stack(
-            alignment: Alignment.center,
-            children: [
-              Icon(
-                isTtsEnabled ? Icons.volume_up : Icons.volume_off,
-                color: isTtsEnabled ? Colors.blue : Colors.grey,
-              ),
-              if (_isTtsPlaying)
-                Positioned(
-                  top: 0,
-                  right: 0,
-                  child: Container(
-                    width: 8,
-                    height: 8,
-                    decoration: const BoxDecoration(
-                      color: Colors.red,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                ),
-            ],
-          ),
-          onPressed: _showTtsSettings,
-          tooltip: 'TTS settings',
-        ),
-        // Auto-flip button
-        IconButton(
-          icon: Stack(
-            alignment: Alignment.center,
-            children: [
-              Icon(
-                isAutoFlipping ? Icons.play_circle : Icons.play_circle_outline,
-                color: isAutoFlipping ? Colors.green : Colors.grey,
-              ),
-              if (isAutoFlipping)
-                Positioned(
-                  top: 0,
-                  right: 0,
-                  child: Container(
-                    width: 8,
-                    height: 8,
-                    decoration: const BoxDecoration(
-                      color: Colors.green,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                ),
-            ],
-          ),
-          onPressed: _showAutoFlipSettings,
-          tooltip: 'Auto-flip settings',
-        ),
-        // Font size button
-        IconButton(
-          icon: const Icon(Icons.text_fields),
-          onPressed: () => _showFontSizeDialog(context),
-          tooltip: 'Font size',
-        ),
-        // Settings button
+        // Settings button (gộp tất cả)
         IconButton(
           icon: const Icon(Icons.settings),
-          onPressed: () => _showSettingsDialog(context),
-          tooltip: 'Customize cards',
+          onPressed: () => _showAllSettingsDialog(context),
+          tooltip: 'Settings',
         ),
         // Progress
         Padding(
@@ -654,6 +594,537 @@ class _StudyPageState extends ConsumerState<StudyPage> {
           ),
         ),
       ],
+    );
+  }
+
+  void _showAllSettingsDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return Dialog(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Container(
+                width: MediaQuery.of(context).size.width * 0.9,
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(context).size.height * 0.85,
+                ),
+                padding: const EdgeInsets.all(16),
+                child: DefaultTabController(
+                  length: 3,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Header
+                      Row(
+                        children: [
+                          Icon(Icons.settings,
+                              color: Theme.of(context).primaryColor),
+                          const SizedBox(width: 8),
+                          const Text(
+                            'Settings',
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const Spacer(),
+                          IconButton(
+                            icon: const Icon(Icons.close),
+                            onPressed: () => Navigator.pop(context),
+                          ),
+                        ],
+                      ),
+                      const Divider(),
+
+                      // Tabs
+                      const TabBar(
+                        tabs: [
+                          Tab(text: 'TTS'),
+                          Tab(text: 'Font Size'),
+                          Tab(text: 'Customize'),
+                        ],
+                      ),
+
+                      const SizedBox(height: 16),
+
+                      // Tab content
+                      Expanded(
+                        child: TabBarView(
+                          children: [
+                            // Tab 1: TTS Settings
+                            _buildTtsTab(),
+                            // Tab 2: Font Size Settings
+                            _buildFontSizeTab(),
+                            // Tab 3: Customize Cards Settings
+                            _buildCustomizeTab(),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // ==================== SETTINGS TABS ====================
+
+  Widget _buildTtsTab() {
+    final settings = ref.watch(ttsProvider);
+    final enabled = settings['enabled'] ?? true;
+    final autoPlay = settings['autoPlay'] ?? false;
+    final currentLanguage = settings['language'] ?? 'ja';
+
+    return StatefulBuilder(
+      builder: (context, setState) {
+        bool tempEnabled = enabled;
+        bool tempAutoPlay = autoPlay;
+        String tempLanguage = currentLanguage;
+
+        return SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Enable/Disable
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'Enable TTS',
+                    style: TextStyle(fontSize: 16),
+                  ),
+                  Switch(
+                    value: tempEnabled,
+                    onChanged: (value) {
+                      setState(() {
+                        tempEnabled = value;
+                      });
+                      // Lưu ngay khi thay đổi
+                      final newSettings = {
+                        'enabled': tempEnabled,
+                        'autoPlay': tempAutoPlay,
+                        'language': tempLanguage,
+                      };
+                      ref.read(ttsProvider.notifier).state = newSettings;
+                    },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+
+              // Auto-play
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'Auto-play on flip',
+                    style: TextStyle(fontSize: 16),
+                  ),
+                  Switch(
+                    value: tempAutoPlay,
+                    onChanged: tempEnabled
+                        ? (value) {
+                            setState(() {
+                              tempAutoPlay = value;
+                            });
+                            final newSettings = {
+                              'enabled': tempEnabled,
+                              'autoPlay': tempAutoPlay,
+                              'language': tempLanguage,
+                            };
+                            ref.read(ttsProvider.notifier).state = newSettings;
+                          }
+                        : null,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+
+              // Language selector
+              DropdownButtonFormField<String>(
+                value: tempLanguage,
+                decoration: const InputDecoration(
+                  labelText: 'Language',
+                  border: OutlineInputBorder(),
+                ),
+                items: _languageLabels.entries.map((entry) {
+                  return DropdownMenuItem(
+                    value: entry.key,
+                    child: Text(entry.value),
+                  );
+                }).toList(),
+                onChanged: tempEnabled
+                    ? (value) {
+                        setState(() {
+                          tempLanguage = value!;
+                        });
+                        final newSettings = {
+                          'enabled': tempEnabled,
+                          'autoPlay': tempAutoPlay,
+                          'language': tempLanguage,
+                        };
+                        ref.read(ttsProvider.notifier).state = newSettings;
+
+                        // Test speak với ngôn ngữ mới
+                        if (_currentCards.isNotEmpty) {
+                          _speakCard(
+                              _currentCards[_currentIndex], tempLanguage);
+                        }
+                      }
+                    : null,
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildFontSizeTab() {
+    final fontSizes = ref.watch(fontSizeProvider);
+    final currentAlignment = ref.watch(textAlignmentProvider);
+
+    final List<Map<String, String>> fontOptions = [
+      {'key': 'vietnamese', 'label': '🇻🇳 Vietnamese'},
+      {'key': 'english', 'label': '🇬🇧 English'},
+      {'key': 'jpKanji', 'label': '🇯🇵 Kanji'},
+      {'key': 'jpReading', 'label': '🔊 Reading'},
+      {'key': 'jpDetailType', 'label': '📝 Word Type'},
+      {'key': 'jpLevel', 'label': '📊 JLPT Level'},
+      {'key': 'enLevel', 'label': '📊 CEFR Level'},
+      {'key': 'hanViet', 'label': '🇻🇳 Han-Viet'},
+      {'key': 'cnCharacter', 'label': '🇨🇳 Chinese'},
+      {'key': 'cnPinyin', 'label': '🔊 Pinyin'},
+      {'key': 'cnLevel', 'label': '📊 HSK Level'},
+      {'key': 'exampleSentence', 'label': '💬 Example'},
+      {'key': 'contextNote', 'label': '📌 Note'},
+    ];
+
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Text Alignment
+          const Text(
+            'Text Alignment:',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _buildAlignmentChip(
+                'Left',
+                TextAlign.left,
+                currentAlignment,
+                () {
+                  ref.read(textAlignmentProvider.notifier).state =
+                      TextAlign.left;
+                  _saveTextAlignmentToPrefs(TextAlign.left);
+                  setState(() {});
+                },
+              ),
+              const SizedBox(width: 8),
+              _buildAlignmentChip(
+                'Center',
+                TextAlign.center,
+                currentAlignment,
+                () {
+                  ref.read(textAlignmentProvider.notifier).state =
+                      TextAlign.center;
+                  _saveTextAlignmentToPrefs(TextAlign.center);
+                  setState(() {});
+                },
+              ),
+              const SizedBox(width: 8),
+              _buildAlignmentChip(
+                'Right',
+                TextAlign.right,
+                currentAlignment,
+                () {
+                  ref.read(textAlignmentProvider.notifier).state =
+                      TextAlign.right;
+                  _saveTextAlignmentToPrefs(TextAlign.right);
+                  setState(() {});
+                },
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 16),
+          const Divider(),
+
+          // Font Sizes
+          const Text(
+            'Font Sizes:',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 8),
+          ...fontOptions.map((option) {
+            final key = option['key']!;
+            final label = option['label']!;
+            final size = fontSizes[key] ?? 16.0;
+
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4.0),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 100,
+                    child: Text(
+                      label,
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                  ),
+                  Expanded(
+                    child: Slider(
+                      value: size,
+                      min: 10,
+                      max: 40,
+                      divisions: 30,
+                      label: '${size.round()}px',
+                      onChanged: (value) {
+                        final newSizes = Map<String, double>.from(fontSizes);
+                        newSizes[key] = value;
+                        ref.read(fontSizeProvider.notifier).state = newSizes;
+                        _saveFontSizesToPrefs(newSizes);
+                        setState(() {});
+                      },
+                    ),
+                  ),
+                  SizedBox(
+                    width: 40,
+                    child: Text(
+                      '${size.round()}px',
+                      style: const TextStyle(fontSize: 12),
+                      textAlign: TextAlign.right,
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }).toList(),
+
+          const SizedBox(height: 8),
+          Center(
+            child: TextButton(
+              onPressed: () {
+                final defaultSizes = {
+                  'vietnamese': 28.0,
+                  'english': 20.0,
+                  'jpKanji': 24.0,
+                  'jpReading': 16.0,
+                  'jpDetailType': 16.0,
+                  'jpLevel': 16.0,
+                  'enLevel': 16.0,
+                  'hanViet': 20.0,
+                  'cnCharacter': 24.0,
+                  'cnPinyin': 16.0,
+                  'cnLevel': 16.0,
+                  'exampleSentence': 16.0,
+                  'contextNote': 16.0,
+                };
+                ref.read(fontSizeProvider.notifier).state = defaultSizes;
+                _saveFontSizesToPrefs(defaultSizes);
+                setState(() {});
+              },
+              child: const Text('Reset to Defaults'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCustomizeTab() {
+    final settings = ref.watch(studySettingsProvider);
+
+    List<String> frontFields = [];
+    final frontData = settings['frontFields'];
+    if (frontData is List) {
+      frontFields = frontData.whereType<String>().toList();
+    } else {
+      frontFields = ['vietnamese', 'english'];
+    }
+
+    List<String> backFields = [];
+    final backData = settings['backFields'];
+    if (backData is List) {
+      backFields = backData.whereType<String>().toList();
+    } else {
+      backFields = [
+        'vietnamese',
+        'english',
+        'jpKanji',
+        'jpReading',
+        'jpDetailType',
+        'jpLevel',
+        'enLevel',
+        'cnCharacter',
+        'cnPinyin',
+        'cnLevel',
+        'exampleSentence',
+        'contextNote'
+      ];
+    }
+
+    final allFields = [
+      'vietnamese',
+      'english',
+      'jpKanji',
+      'jpReading',
+      'jpType',
+      'jpDetailType',
+      'jpLevel',
+      'enIpa',
+      'enLevel',
+      'hanViet',
+      'cnCharacter',
+      'cnPinyin',
+      'cnLevel',
+      'exampleSentence',
+      'contextNote'
+    ];
+
+    final fieldLabels = {
+      'vietnamese': '🇻🇳 Vietnamese',
+      'english': '🇬🇧 English',
+      'jpKanji': '🇯🇵 Kanji',
+      'jpReading': '🔊 Reading',
+      'jpType': '📝 JP Type',
+      'jpDetailType': '📋 Word Type',
+      'jpLevel': '📊 JLPT',
+      'enIpa': '🔊 IPA',
+      'enLevel': '📊 CEFR',
+      'hanViet': '🇻🇳 Han-Viet',
+      'cnCharacter': '🇨🇳 Chinese',
+      'cnPinyin': '🔊 Pinyin',
+      'cnLevel': '📊 HSK',
+      'exampleSentence': '💬 Example',
+      'contextNote': '📌 Note',
+    };
+
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '📖 Front Side',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: Colors.blue,
+            ),
+          ),
+          const SizedBox(height: 8),
+          ...allFields.map((key) {
+            return CheckboxListTile(
+              title: Text(fieldLabels[key] ?? key),
+              value: frontFields.contains(key),
+              onChanged: (checked) {
+                if (checked == true) {
+                  if (!frontFields.contains(key)) {
+                    frontFields.add(key);
+                  }
+                } else {
+                  frontFields.remove(key);
+                }
+                final newSettings = {
+                  'frontFields': List<String>.from(frontFields),
+                  'backFields': List<String>.from(backFields),
+                };
+                ref.read(studySettingsProvider.notifier).state = newSettings;
+                _saveSettingsToPrefs(newSettings);
+                setState(() {});
+              },
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+            );
+          }).toList(),
+          const SizedBox(height: 16),
+          const Divider(),
+          const Text(
+            '📖 Back Side',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: Colors.green,
+            ),
+          ),
+          const SizedBox(height: 8),
+          ...allFields.map((key) {
+            return CheckboxListTile(
+              title: Text(fieldLabels[key] ?? key),
+              value: backFields.contains(key),
+              onChanged: (checked) {
+                if (checked == true) {
+                  if (!backFields.contains(key)) {
+                    backFields.add(key);
+                  }
+                } else {
+                  backFields.remove(key);
+                }
+                final newSettings = {
+                  'frontFields': List<String>.from(frontFields),
+                  'backFields': List<String>.from(backFields),
+                };
+                ref.read(studySettingsProvider.notifier).state = newSettings;
+                _saveSettingsToPrefs(newSettings);
+                setState(() {});
+              },
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+            );
+          }).toList(),
+          const SizedBox(height: 8),
+          Center(
+            child: TextButton(
+              onPressed: () {
+                final defaultFront = ['vietnamese', 'english'];
+                final defaultBack = [
+                  'vietnamese',
+                  'english',
+                  'jpKanji',
+                  'jpReading',
+                  'jpDetailType',
+                  'jpLevel',
+                  'enLevel',
+                  'cnCharacter',
+                  'cnPinyin',
+                  'cnLevel',
+                  'exampleSentence',
+                  'contextNote'
+                ];
+                final newSettings = {
+                  'frontFields': defaultFront,
+                  'backFields': defaultBack,
+                };
+                ref.read(studySettingsProvider.notifier).state = newSettings;
+                _saveSettingsToPrefs(newSettings);
+                setState(() {});
+              },
+              child: const Text('Reset to Defaults'),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -2425,10 +2896,14 @@ class _StudyPageState extends ConsumerState<StudyPage> {
       });
       ref.read(isTtsPlayingProvider.notifier).state = true;
 
-      // Cập nhật ngôn ngữ
+      // Cập nhật ngôn ngữ - QUAN TRỌNG: Phải set language trước khi speak
       final langCode = _languageCodes[language] ?? 'ja-JP';
+      print('🔊 Setting language to: $langCode');
       await _flutterTts.setLanguage(langCode);
       _currentLanguage = language;
+
+      // Thêm chút delay để language được set
+      await Future.delayed(const Duration(milliseconds: 100));
 
       print('🔊 Speaking: "$text" in $langCode');
 
@@ -2504,6 +2979,10 @@ class _StudyPageState extends ConsumerState<StudyPage> {
       textToSpeak = card.vietnamese;
     }
 
+    // Cập nhật language trước khi speak
+    await _flutterTts.setLanguage(_languageCodes[language] ?? 'ja-JP');
+    _currentLanguage = language;
+
     await _speakText(textToSpeak, language);
   }
 
@@ -2513,15 +2992,17 @@ class _StudyPageState extends ConsumerState<StudyPage> {
     final autoPlay = settings['autoPlay'] ?? false;
     final currentLanguage = settings['language'] ?? 'ja';
 
+    // Tạo bản sao để làm việc
+    bool tempEnabled = enabled;
+    bool tempAutoPlay = autoPlay;
+    String tempLanguage = currentLanguage;
+
     showDialog(
       context: context,
+      barrierDismissible: false,
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setState) {
-            bool tempEnabled = enabled;
-            bool tempAutoPlay = autoPlay;
-            String tempLanguage = currentLanguage;
-
             return AlertDialog(
               title: const Row(
                 children: [
@@ -2551,43 +3032,45 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                   const SizedBox(height: 8),
 
                   // Auto-play
-                  if (tempEnabled)
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text('Auto-play on flip'),
-                        Switch(
-                          value: tempAutoPlay,
-                          onChanged: (value) {
-                            setState(() {
-                              tempAutoPlay = value;
-                            });
-                          },
-                        ),
-                      ],
-                    ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('Auto-play on flip'),
+                      Switch(
+                        value: tempAutoPlay,
+                        onChanged: tempEnabled
+                            ? (value) {
+                                setState(() {
+                                  tempAutoPlay = value;
+                                });
+                              }
+                            : null,
+                      ),
+                    ],
+                  ),
                   const SizedBox(height: 8),
 
                   // Language selector
-                  if (tempEnabled)
-                    DropdownButtonFormField<String>(
-                      value: tempLanguage,
-                      decoration: const InputDecoration(
-                        labelText: 'Language',
-                        border: OutlineInputBorder(),
-                      ),
-                      items: _languageLabels.entries.map((entry) {
-                        return DropdownMenuItem(
-                          value: entry.key,
-                          child: Text(entry.value),
-                        );
-                      }).toList(),
-                      onChanged: (value) {
-                        setState(() {
-                          tempLanguage = value!;
-                        });
-                      },
+                  DropdownButtonFormField<String>(
+                    value: tempLanguage,
+                    decoration: const InputDecoration(
+                      labelText: 'Language',
+                      border: OutlineInputBorder(),
                     ),
+                    items: _languageLabels.entries.map((entry) {
+                      return DropdownMenuItem(
+                        value: entry.key,
+                        child: Text(entry.value),
+                      );
+                    }).toList(),
+                    onChanged: tempEnabled
+                        ? (value) {
+                            setState(() {
+                              tempLanguage = value!;
+                            });
+                          }
+                        : null,
+                  ),
                 ],
               ),
               actions: [
@@ -2605,7 +3088,7 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                     };
                     ref.read(ttsProvider.notifier).state = newSettings;
 
-                    // Test TTS
+                    // Test TTS với ngôn ngữ đã chọn
                     if (tempEnabled && _currentCards.isNotEmpty) {
                       _speakCard(_currentCards[_currentIndex], tempLanguage);
                     }
