@@ -9,6 +9,8 @@ import 'package:flip_card/flip_card.dart';
 import 'package:flashcard_app/features/flashcard/data/models/flashcard_model.dart';
 import 'package:flashcard_app/core/database/local_database.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_tts/flutter_tts.dart';
+import 'package:audioplayers/audioplayers.dart';
 
 // ==================== PROVIDERS ====================
 
@@ -58,6 +60,17 @@ final autoFlipProvider = StateProvider<Map<String, dynamic>>((ref) => {
 
 final autoFlipTimerProvider = StateProvider<Timer?>((ref) => null);
 final isAutoFlippingProvider = StateProvider<bool>((ref) => false);
+
+// ==================== TTS PROVIDER ====================
+
+final ttsProvider = StateProvider<Map<String, dynamic>>((ref) => {
+      'enabled': true,
+      'autoPlay': false, // Tự động phát khi lật thẻ
+      'language': 'ja', // 'ja', 'en', 'vi', 'zh'
+    });
+
+final ttsLanguageProvider = StateProvider<String>((ref) => 'ja');
+final isTtsPlayingProvider = StateProvider<bool>((ref) => false);
 
 // ==================== STUDY PAGE ====================
 
@@ -109,6 +122,26 @@ class _StudyPageState extends ConsumerState<StudyPage> {
   Timer? _autoFlipTimer;
   bool _isAutoFlipping = false;
   double _autoFlipDuration = 3.0;
+  // TTS
+  final FlutterTts _flutterTts = FlutterTts();
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  bool _isTtsPlaying = false;
+  String _currentLanguage = 'ja';
+
+  // Language codes
+  final Map<String, String> _languageCodes = {
+    'ja': 'ja-JP',
+    'en': 'en-US',
+    'vi': 'vi-VN',
+    'zh': 'zh-CN',
+  };
+
+  final Map<String, String> _languageLabels = {
+    'ja': '🇯🇵 Japanese',
+    'en': '🇬🇧 English',
+    'vi': '🇻🇳 Vietnamese',
+    'zh': '🇨🇳 Chinese',
+  };
 
   // ==================== INIT ====================
 
@@ -132,6 +165,7 @@ class _StudyPageState extends ConsumerState<StudyPage> {
     _loadSettingsFromPrefs();
     _loadFontSizesFromPrefs();
     _loadTextAlignmentFromPrefs();
+    _initTts();
 
     // 5. Load dữ liệu từ database (sau khi đã khởi tạo xong)
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -143,7 +177,29 @@ class _StudyPageState extends ConsumerState<StudyPage> {
   void dispose() {
     _pageController.dispose();
     _stopAutoFlip();
+    _stopTts();
+    _audioPlayer.dispose();
     super.dispose();
+  }
+
+  // ==================== TTS INIT ====================
+
+  Future<void> _initTts() async {
+    try {
+      // Cài đặt ngôn ngữ mặc định
+      final lang = _languageCodes['ja'] ?? 'ja-JP';
+      await _flutterTts.setLanguage(lang);
+      await _flutterTts.setSpeechRate(0.5);
+      await _flutterTts.setPitch(1.0);
+      await _flutterTts.setVolume(1.0);
+
+      // Cài đặt audio player
+      await _audioPlayer.setReleaseMode(ReleaseMode.stop);
+
+      print('✅ TTS initialized successfully');
+    } catch (e) {
+      print('❌ Error initializing TTS: $e');
+    }
   }
 
   Future<void> _loadDataFromDatabase() async {
@@ -413,7 +469,23 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                     setState(() {
                       _currentIndex = index;
                     });
-                    // Reset auto-flip timer khi chuyển trang thủ công
+
+                    // Auto-play TTS khi chuyển trang
+                    final ttsSettings = ref.read(ttsProvider);
+                    final autoPlay = ttsSettings['autoPlay'] ?? false;
+                    final enabled = ttsSettings['enabled'] ?? true;
+                    final language = ttsSettings['language'] ?? 'ja';
+
+                    if (autoPlay && enabled && _currentCards.isNotEmpty) {
+                      // Chờ một chút để card load xong
+                      Future.delayed(const Duration(milliseconds: 500), () {
+                        if (mounted && _currentCards.isNotEmpty) {
+                          _speakCard(_currentCards[_currentIndex], language);
+                        }
+                      });
+                    }
+
+                    // Reset auto-flip timer
                     if (_isAutoFlipping) {
                       _startAutoFlip();
                     }
@@ -498,10 +570,40 @@ class _StudyPageState extends ConsumerState<StudyPage> {
 
   PreferredSizeWidget _buildAppBar(int totalCards) {
     final isAutoFlipping = ref.watch(isAutoFlippingProvider);
+    final ttsSettings = ref.watch(ttsProvider);
+    final isTtsEnabled = ttsSettings['enabled'] ?? true;
+
     return AppBar(
       title: const Text('Study'),
       backgroundColor: Theme.of(context).colorScheme.inversePrimary,
       actions: [
+        // TTS button
+        IconButton(
+          icon: Stack(
+            alignment: Alignment.center,
+            children: [
+              Icon(
+                isTtsEnabled ? Icons.volume_up : Icons.volume_off,
+                color: isTtsEnabled ? Colors.blue : Colors.grey,
+              ),
+              if (_isTtsPlaying)
+                Positioned(
+                  top: 0,
+                  right: 0,
+                  child: Container(
+                    width: 8,
+                    height: 8,
+                    decoration: const BoxDecoration(
+                      color: Colors.red,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          onPressed: _showTtsSettings,
+          tooltip: 'TTS settings',
+        ),
         // Auto-flip button
         IconButton(
           icon: Stack(
@@ -714,7 +816,10 @@ class _StudyPageState extends ConsumerState<StudyPage> {
 
   Widget _buildFrontCard(Flashcard card) {
     final settings = ref.watch(studySettingsProvider);
+    final ttsSettings = ref.watch(ttsProvider);
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final isTtsEnabled = ttsSettings['enabled'] ?? true;
+    final currentLanguage = ttsSettings['language'] ?? 'ja';
 
     List<String> frontFields = [];
     final frontData = settings['frontFields'];
@@ -810,7 +915,30 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                       ),
                     ),
                   ),
-                  _buildStatusDropdown(card),
+                  Row(
+                    children: [
+                      // TTS Audio Button
+                      if (isTtsEnabled)
+                        IconButton(
+                          icon: Icon(
+                            _isTtsPlaying ? Icons.stop : Icons.volume_up,
+                            size: 20,
+                            color: _isTtsPlaying ? Colors.red : Colors.blue,
+                          ),
+                          onPressed: () {
+                            if (_isTtsPlaying) {
+                              _stopTts();
+                            } else {
+                              _speakCard(card, currentLanguage);
+                            }
+                          },
+                          tooltip: 'Pronounce',
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                        ),
+                      _buildStatusDropdown(card),
+                    ],
+                  ),
                 ],
               ),
               const SizedBox(height: 24),
@@ -823,14 +951,14 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                   color: hintBgColor,
                   borderRadius: BorderRadius.circular(20),
                 ),
-                child: Row(
+                child: const Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.touch_app, size: 16, color: hintTextColor),
-                    const SizedBox(width: 8),
+                    Icon(Icons.touch_app, size: 16, color: Colors.grey),
+                    SizedBox(width: 8),
                     Text(
                       'Tap to flip',
-                      style: TextStyle(fontSize: 12, color: hintTextColor),
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
                     ),
                   ],
                 ),
@@ -846,7 +974,10 @@ class _StudyPageState extends ConsumerState<StudyPage> {
 
   Widget _buildBackCard(Flashcard card) {
     final settings = ref.watch(studySettingsProvider);
+    final ttsSettings = ref.watch(ttsProvider);
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final isTtsEnabled = ttsSettings['enabled'] ?? true;
+    final currentLanguage = ttsSettings['language'] ?? 'ja';
 
     List<String> backFields = [];
     final backData = settings['backFields'];
@@ -956,7 +1087,30 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                       ),
                     ),
                   ),
-                  _buildStatusDropdown(card),
+                  Row(
+                    children: [
+                      // TTS Audio Button
+                      if (isTtsEnabled)
+                        IconButton(
+                          icon: Icon(
+                            _isTtsPlaying ? Icons.stop : Icons.volume_up,
+                            size: 20,
+                            color: _isTtsPlaying ? Colors.red : Colors.green,
+                          ),
+                          onPressed: () {
+                            if (_isTtsPlaying) {
+                              _stopTts();
+                            } else {
+                              _speakCard(card, currentLanguage);
+                            }
+                          },
+                          tooltip: 'Pronounce',
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                        ),
+                      _buildStatusDropdown(card),
+                    ],
+                  ),
                 ],
               ),
               const SizedBox(height: 24),
@@ -2248,6 +2402,217 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                     backgroundColor: tempEnabled ? Colors.green : Colors.grey,
                   ),
                   child: Text(tempEnabled ? 'Start Auto-Flip' : 'Apply'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // ==================== TTS FUNCTIONS ====================
+
+  Future<void> _speakText(String text, String language) async {
+    try {
+      if (text.isEmpty) return;
+
+      // Dừng phát hiện tại
+      await _stopTts();
+
+      setState(() {
+        _isTtsPlaying = true;
+      });
+      ref.read(isTtsPlayingProvider.notifier).state = true;
+
+      // Cập nhật ngôn ngữ
+      final langCode = _languageCodes[language] ?? 'ja-JP';
+      await _flutterTts.setLanguage(langCode);
+      _currentLanguage = language;
+
+      print('🔊 Speaking: "$text" in $langCode');
+
+      // Phát text
+      final result = await _flutterTts.speak(text);
+
+      if (result == 1) {
+        print('✅ TTS speaking successfully');
+      } else {
+        print('⚠️ TTS speak returned: $result');
+      }
+
+      // Lắng nghe sự kiện hoàn thành
+      _flutterTts.setCompletionHandler(() {
+        setState(() {
+          _isTtsPlaying = false;
+        });
+        ref.read(isTtsPlayingProvider.notifier).state = false;
+        print('✅ TTS completed');
+      });
+
+      _flutterTts.setErrorHandler((error) {
+        setState(() {
+          _isTtsPlaying = false;
+        });
+        ref.read(isTtsPlayingProvider.notifier).state = false;
+        print('❌ TTS error: $error');
+      });
+    } catch (e) {
+      print('❌ Error speaking text: $e');
+      setState(() {
+        _isTtsPlaying = false;
+      });
+      ref.read(isTtsPlayingProvider.notifier).state = false;
+    }
+  }
+
+  Future<void> _stopTts() async {
+    try {
+      await _flutterTts.stop();
+      setState(() {
+        _isTtsPlaying = false;
+      });
+      ref.read(isTtsPlayingProvider.notifier).state = false;
+      print('⏹️ TTS stopped');
+    } catch (e) {
+      print('❌ Error stopping TTS: $e');
+    }
+  }
+
+  Future<void> _speakCard(Flashcard card, String language) async {
+    // Chọn text để phát dựa trên ngôn ngữ
+    String textToSpeak = '';
+
+    switch (language) {
+      case 'ja':
+        textToSpeak = card.jpKanji ?? card.jpReading ?? card.vietnamese;
+        break;
+      case 'en':
+        textToSpeak = card.english ?? card.vietnamese;
+        break;
+      case 'vi':
+        textToSpeak = card.vietnamese;
+        break;
+      case 'zh':
+        textToSpeak = card.cnCharacter ?? card.cnPinyin ?? card.vietnamese;
+        break;
+      default:
+        textToSpeak = card.vietnamese;
+    }
+
+    if (textToSpeak.isEmpty) {
+      textToSpeak = card.vietnamese;
+    }
+
+    await _speakText(textToSpeak, language);
+  }
+
+  void _showTtsSettings() {
+    final settings = ref.read(ttsProvider);
+    final enabled = settings['enabled'] ?? true;
+    final autoPlay = settings['autoPlay'] ?? false;
+    final currentLanguage = settings['language'] ?? 'ja';
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            bool tempEnabled = enabled;
+            bool tempAutoPlay = autoPlay;
+            String tempLanguage = currentLanguage;
+
+            return AlertDialog(
+              title: const Row(
+                children: [
+                  Icon(Icons.volume_up, color: Colors.blue),
+                  SizedBox(width: 8),
+                  Text('TTS Settings'),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Enable/Disable
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('Enable TTS'),
+                      Switch(
+                        value: tempEnabled,
+                        onChanged: (value) {
+                          setState(() {
+                            tempEnabled = value;
+                          });
+                        },
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+
+                  // Auto-play
+                  if (tempEnabled)
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Auto-play on flip'),
+                        Switch(
+                          value: tempAutoPlay,
+                          onChanged: (value) {
+                            setState(() {
+                              tempAutoPlay = value;
+                            });
+                          },
+                        ),
+                      ],
+                    ),
+                  const SizedBox(height: 8),
+
+                  // Language selector
+                  if (tempEnabled)
+                    DropdownButtonFormField<String>(
+                      value: tempLanguage,
+                      decoration: const InputDecoration(
+                        labelText: 'Language',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: _languageLabels.entries.map((entry) {
+                        return DropdownMenuItem(
+                          value: entry.key,
+                          child: Text(entry.value),
+                        );
+                      }).toList(),
+                      onChanged: (value) {
+                        setState(() {
+                          tempLanguage = value!;
+                        });
+                      },
+                    ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    // Lưu settings
+                    final newSettings = {
+                      'enabled': tempEnabled,
+                      'autoPlay': tempAutoPlay,
+                      'language': tempLanguage,
+                    };
+                    ref.read(ttsProvider.notifier).state = newSettings;
+
+                    // Test TTS
+                    if (tempEnabled && _currentCards.isNotEmpty) {
+                      _speakCard(_currentCards[_currentIndex], tempLanguage);
+                    }
+
+                    Navigator.pop(context);
+                  },
+                  child: const Text('Apply'),
                 ),
               ],
             );
