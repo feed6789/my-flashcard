@@ -415,6 +415,88 @@ class SupabaseSource implements FlashcardSource {
     }
   }
 
+  // Sync study status lên Supabase
+  Future<void> syncStudyStatus(String cardId, String studyStatus) async {
+    try {
+      final user = SupabaseConfig.currentUser;
+      if (user == null) {
+        throw Exception('User not authenticated');
+      }
+
+      print('🔄 Syncing study status for card $cardId: $studyStatus');
+
+      await _client
+          .from('flashcards')
+          .update({
+            'study_status': studyStatus,
+            'updated_at': DateTime.now().toIso8601String(),
+          })
+          .eq('id', cardId)
+          .eq('user_id', user.id);
+
+      print('✅ Synced study status for card $cardId');
+    } catch (e) {
+      print('❌ Error syncing study status: $e');
+      rethrow;
+    }
+  }
+
+// Sync multiple cards
+  Future<void> syncMultipleStudyStatus(Map<String, String> updates) async {
+    try {
+      final user = SupabaseConfig.currentUser;
+      if (user == null) {
+        throw Exception('User not authenticated');
+      }
+
+      print('🔄 Syncing ${updates.length} study statuses');
+
+      for (var entry in updates.entries) {
+        await _client
+            .from('flashcards')
+            .update({
+              'study_status': entry.value,
+              'updated_at': DateTime.now().toIso8601String(),
+            })
+            .eq('id', entry.key)
+            .eq('user_id', user.id);
+      }
+
+      print('✅ Synced ${updates.length} study statuses');
+    } catch (e) {
+      print('❌ Error syncing study statuses: $e');
+      rethrow;
+    }
+  }
+
+// Load study status từ Supabase
+  Future<Map<String, String>> loadStudyStatus() async {
+    try {
+      final user = SupabaseConfig.currentUser;
+      if (user == null) {
+        throw Exception('User not authenticated');
+      }
+
+      print('📥 Loading study statuses from Supabase...');
+
+      final response = await _client
+          .from('flashcards')
+          .select('id, study_status')
+          .eq('user_id', user.id);
+
+      final Map<String, String> statusMap = {};
+      for (var item in response) {
+        statusMap[item['id']] = item['study_status'] ?? 'new';
+      }
+
+      print('✅ Loaded ${statusMap.length} study statuses');
+      return statusMap;
+    } catch (e) {
+      print('❌ Error loading study statuses: $e');
+      return {};
+    }
+  }
+
   // ==================== UNSUPPORTED METHODS ====================
   // Các phương thức này không được hỗ trợ vì Supabase chỉ đọc
 

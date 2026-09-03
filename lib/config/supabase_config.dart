@@ -1,7 +1,6 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class SupabaseConfig {
-  // Thay thế bằng thông tin của bạn
   static const String url = 'https://faitsgsqijxfeybqewqx.supabase.co';
   static const String anonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZhaXRzZ3NxaWp4ZmV5YnFld3F4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODgwOTYwNjUsImV4cCI6MjEwMzY3MjA2NX0.iWaoxlqw_U7i7c9MvzM27Er0mrJzed2zyDw8gf5syjI';
   
@@ -13,4 +12,27 @@ class SupabaseConfig {
   }
   
   static SupabaseClient get client => Supabase.instance.client;
+  
+  // Auth helpers
+  static Future<AuthResponse> signInWithEmail(String email, String password) async {
+    return await client.auth.signInWithPassword(
+      email: email,
+      password: password,
+    );
+  }
+  
+  static Future<AuthResponse> signUpWithEmail(String email, String password) async {
+    return await client.auth.signUp(
+      email: email,
+      password: password,
+    );
+  }
+  
+  static Future<void> signOut() async {
+    await client.auth.signOut();
+  }
+  
+  static User? get currentUser => client.auth.currentUser;
+  
+  static bool get isAuthenticated => currentUser != null;
 }
