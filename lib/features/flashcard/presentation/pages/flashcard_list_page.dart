@@ -260,48 +260,16 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
   }
 
   void _loadSettings() {
-    final settings = ref.read(settingsProvider);
-
-    // Load từ SharedPreferences trước
-    _loadCurrentPage().then((_) {
-      // Sau khi load trang, load các settings khác
-      setState(() {
-        _itemsPerPage = settings['itemsPerPage'] ?? 50;
-        _pageSize = _itemsPerPage;
-
-        // Load show fields
-        final showFieldsData = settings['showFields'];
-        if (showFieldsData is Map<String, dynamic>) {
-          _showFields = {};
-          showFieldsData.forEach((key, value) {
-            _showFields[key] = value is bool ? value : true;
-          });
-        } else {
-          _showFields = {
-            'vietnamese': true,
-            'english': true,
-            'jpKanji': true,
-            'jpReading': true,
-            'jpType': true,
-            'jpDetailType': true,
-            'jpLevel': true,
-            'enIpa': true,
-            'enLevel': true,
-            'hanViet': true,
-            'cnCharacter': true,
-            'cnPinyin': true,
-            'cnLevel': true,
-            'exampleSentence': true,
-            'contextNote': true,
-          };
-        }
-
-        // Load selected filters
-        _selectedFilters = _loadSelectedFiltersSafe(settings);
+    // Load settings từ SharedPreferences trước
+    _loadSettingsState().then((_) {
+      // Load filter từ SharedPreferences
+      _loadFilterState().then((_) {
+        // Load current page
+        _loadCurrentPage().then((_) {
+          // Sau khi load tất cả, load dữ liệu
+          _loadFlashcardsWithFilter();
+        });
       });
-
-      // Load dữ liệu sau khi đã có trang
-      _loadFlashcardsWithFilter();
     });
   }
 
@@ -484,7 +452,6 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
       String sortBy = filters['sortBy'] ?? 'id';
       bool ascending = filters['sortAscending'] ?? true;
 
-      // Tính offset dựa trên trang hiện tại
       final offset = _currentPage * _pageSize;
 
       final cards = await localDb.getFlashcardsWithFilter(
@@ -516,11 +483,13 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
         _isSearching = false;
       });
 
-      // LƯU TRANG HIỆN TẠI SAU KHI LOAD THÀNH CÔNG
+      // LƯU TẤT CẢ TRẠNG THÁI
       await _saveCurrentPage();
+      await _saveFilterState();
+      await _saveSettingsState();
 
       print(
-          '📊 Loaded ${cards.length} cards (total: $total, page: ${_currentPage + 1}, offset: $offset)');
+          '📊 Loaded ${cards.length} cards (total: $total, page: ${_currentPage + 1})');
     } catch (e) {
       print('❌ Error loading with filter: $e');
       setState(() {
@@ -911,11 +880,12 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                               _sortBy = sortBy;
                               _sortAscending = sortAscending;
                               _showFields = Map<String, bool>.from(showFields);
-                              // KHÔNG reset _currentPage
                             });
 
-                            // Lưu page size vào SharedPreferences
+                            // Lưu tất cả trạng thái
+                            _saveSettingsState();
                             _saveCurrentPage();
+                            _saveFilterState();
 
                             // Cập nhật filter
                             final currentFilter = ref.read(filterProvider);
@@ -2140,12 +2110,13 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                             ref.read(filterProvider.notifier).state = filterMap;
                             Navigator.pop(context);
 
-                            // Áp dụng filter - RESET về trang 1 khi thay đổi filter
+                            // Áp dụng filter - RESET về trang 1
                             setState(() {
                               _currentPage = 0;
                               _totalItems = 0;
                             });
                             _loadFlashcardsWithFilter();
+                            // _loadFlashcardsWithFilter sẽ tự động lưu tất cả trạng thái
                           },
                           child: const Text('Apply'),
                         ),
@@ -3235,6 +3206,242 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
       }
     } catch (e) {
       print('❌ Error loading page state: $e');
+    }
+  }
+
+  // ==================== SAVE / LOAD FILTER STATE ====================
+
+  Future<void> _saveFilterState() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final filters = ref.read(filterProvider);
+
+      // Lưu từng filter
+      if (filters.containsKey('jpLevel')) {
+        await prefs.setString('filter_jpLevel', filters['jpLevel'] ?? '');
+      }
+      if (filters.containsKey('enLevel')) {
+        await prefs.setString('filter_enLevel', filters['enLevel'] ?? '');
+      }
+      if (filters.containsKey('cnLevel')) {
+        await prefs.setString('filter_cnLevel', filters['cnLevel'] ?? '');
+      }
+      if (filters.containsKey('jpDetailType')) {
+        await prefs.setString(
+            'filter_jpDetailType', filters['jpDetailType'] ?? '');
+      }
+      if (filters.containsKey('studyStatus')) {
+        await prefs.setString(
+            'filter_studyStatus', filters['studyStatus'] ?? '');
+      }
+      if (filters.containsKey('searchQuery')) {
+        await prefs.setString(
+            'filter_searchQuery', filters['searchQuery'] ?? '');
+      }
+      if (filters.containsKey('sortBy')) {
+        await prefs.setString('filter_sortBy', filters['sortBy'] ?? 'id');
+      }
+      if (filters.containsKey('sortAscending')) {
+        await prefs.setBool(
+            'filter_sortAscending', filters['sortAscending'] ?? true);
+      }
+
+      print('💾 Saved filter state');
+    } catch (e) {
+      print('❌ Error saving filter state: $e');
+    }
+  }
+
+  Future<void> _loadFilterState() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final filters = <String, dynamic>{};
+
+      // Load từng filter
+      final jpLevel = prefs.getString('filter_jpLevel');
+      if (jpLevel != null && jpLevel.isNotEmpty) {
+        filters['jpLevel'] = jpLevel;
+      }
+
+      final enLevel = prefs.getString('filter_enLevel');
+      if (enLevel != null && enLevel.isNotEmpty) {
+        filters['enLevel'] = enLevel;
+      }
+
+      final cnLevel = prefs.getString('filter_cnLevel');
+      if (cnLevel != null && cnLevel.isNotEmpty) {
+        filters['cnLevel'] = cnLevel;
+      }
+
+      final jpDetailType = prefs.getString('filter_jpDetailType');
+      if (jpDetailType != null && jpDetailType.isNotEmpty) {
+        filters['jpDetailType'] = jpDetailType;
+      }
+
+      final studyStatus = prefs.getString('filter_studyStatus');
+      if (studyStatus != null && studyStatus.isNotEmpty) {
+        filters['studyStatus'] = studyStatus;
+      }
+
+      final searchQuery = prefs.getString('filter_searchQuery');
+      if (searchQuery != null && searchQuery.isNotEmpty) {
+        filters['searchQuery'] = searchQuery;
+      }
+
+      final sortBy = prefs.getString('filter_sortBy');
+      if (sortBy != null && sortBy.isNotEmpty) {
+        filters['sortBy'] = sortBy;
+      }
+
+      final sortAscending = prefs.getBool('filter_sortAscending');
+      if (sortAscending != null) {
+        filters['sortAscending'] = sortAscending;
+      }
+
+      if (filters.isNotEmpty) {
+        ref.read(filterProvider.notifier).state = filters;
+        print('📂 Loaded filter state: $filters');
+      }
+    } catch (e) {
+      print('❌ Error loading filter state: $e');
+    }
+  }
+
+  // ==================== SAVE / LOAD SETTINGS STATE ====================
+
+  Future<void> _saveSettingsState() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final settings = ref.read(settingsProvider);
+
+      // Lưu items per page
+      await prefs.setInt(
+          'settings_itemsPerPage', settings['itemsPerPage'] ?? 50);
+
+      // Lưu sort
+      await prefs.setString('settings_sortBy', settings['sortBy'] ?? 'id');
+      await prefs.setBool(
+          'settings_sortAscending', settings['sortAscending'] ?? true);
+
+      // Lưu show fields
+      final showFields = settings['showFields'] as Map<String, bool>?;
+      if (showFields != null) {
+        final fieldsJson = <String, String>{};
+        showFields.forEach((key, value) {
+          fieldsJson[key] = value.toString();
+        });
+        await prefs.setString('settings_showFields', fieldsJson.toString());
+      }
+
+      // Lưu selected filters
+      final selectedFilters = _selectedFilters;
+      if (selectedFilters.isNotEmpty) {
+        final filtersJson = <String, String>{};
+        selectedFilters.forEach((key, value) {
+          filtersJson[key] = value.join(',');
+        });
+        await prefs.setString(
+            'settings_selectedFilters', filtersJson.toString());
+      }
+
+      print('💾 Saved settings state');
+    } catch (e) {
+      print('❌ Error saving settings state: $e');
+    }
+  }
+
+  Future<void> _loadSettingsState() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final settings = <String, dynamic>{};
+
+      // Load items per page
+      final itemsPerPage = prefs.getInt('settings_itemsPerPage');
+      if (itemsPerPage != null) {
+        settings['itemsPerPage'] = itemsPerPage;
+        setState(() {
+          _itemsPerPage = itemsPerPage;
+          _pageSize = itemsPerPage;
+        });
+      }
+
+      // Load sort
+      final sortBy = prefs.getString('settings_sortBy');
+      if (sortBy != null) {
+        settings['sortBy'] = sortBy;
+        setState(() {
+          _sortBy = sortBy;
+        });
+      }
+
+      final sortAscending = prefs.getBool('settings_sortAscending');
+      if (sortAscending != null) {
+        settings['sortAscending'] = sortAscending;
+        setState(() {
+          _sortAscending = sortAscending;
+        });
+      }
+
+      // Load show fields
+      final showFieldsData = prefs.getString('settings_showFields');
+      if (showFieldsData != null && showFieldsData.isNotEmpty) {
+        try {
+          final Map<String, bool> showFields = {};
+          final cleaned =
+              showFieldsData.replaceAll('{', '').replaceAll('}', '');
+          final parts = cleaned.split(', ');
+          for (var part in parts) {
+            final pair = part.split(': ');
+            if (pair.length == 2) {
+              final key = pair[0].trim();
+              final value = pair[1].trim() == 'true';
+              showFields[key] = value;
+            }
+          }
+          if (showFields.isNotEmpty) {
+            settings['showFields'] = showFields;
+            setState(() {
+              _showFields = showFields;
+            });
+          }
+        } catch (e) {
+          print('❌ Error parsing show fields: $e');
+        }
+      }
+
+      // Load selected filters
+      final selectedFiltersData = prefs.getString('settings_selectedFilters');
+      if (selectedFiltersData != null && selectedFiltersData.isNotEmpty) {
+        try {
+          final Map<String, List<String>> selectedFilters = {};
+          final cleaned =
+              selectedFiltersData.replaceAll('{', '').replaceAll('}', '');
+          final parts = cleaned.split(', ');
+          for (var part in parts) {
+            final pair = part.split(': ');
+            if (pair.length == 2) {
+              final key = pair[0].trim();
+              final values =
+                  pair[1].trim().split(',').where((s) => s.isNotEmpty).toList();
+              selectedFilters[key] = values;
+            }
+          }
+          if (selectedFilters.isNotEmpty) {
+            setState(() {
+              _selectedFilters = selectedFilters;
+            });
+          }
+        } catch (e) {
+          print('❌ Error parsing selected filters: $e');
+        }
+      }
+
+      if (settings.isNotEmpty) {
+        ref.read(settingsProvider.notifier).state = settings;
+        print('📂 Loaded settings state');
+      }
+    } catch (e) {
+      print('❌ Error loading settings state: $e');
     }
   }
 }
