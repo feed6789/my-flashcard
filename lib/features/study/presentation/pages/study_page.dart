@@ -181,19 +181,12 @@ class _StudyPageState extends ConsumerState<StudyPage> {
       _controllers[i] = FlipCardController();
     }
 
-    // 4. Load settings
-    _loadSettingsFromPrefs();
-    _loadFontSizesFromPrefs();
-    _loadTextAlignmentFromPrefs();
-    _initTts();
-
-    // Load auto-flip settings
-    _autoFlipFrontDuration = ref.read(autoFlipFrontDurationProvider);
-    _autoFlipBackDuration = ref.read(autoFlipBackDurationProvider);
-
-    // 5. Load dữ liệu từ database (sau khi đã khởi tạo xong)
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _loadDataFromDatabase();
+    // 4. LOAD TẤT CẢ SETTINGS TỪ SHAREDPREFERENCES
+    _loadAllStudySettings().then((_) {
+      // Sau khi load settings xong, load dữ liệu từ database
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _loadDataFromDatabase();
+      });
     });
   }
 
@@ -203,6 +196,7 @@ class _StudyPageState extends ConsumerState<StudyPage> {
     _stopAutoFlip();
     _stopTts();
     _audioPlayer.dispose();
+    _saveAllStudySettings();
     super.dispose();
   }
 
@@ -654,78 +648,125 @@ class _StudyPageState extends ConsumerState<StudyPage> {
       context: context,
       barrierDismissible: true,
       builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setState) {
-            return Dialog(
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Container(
-                width: MediaQuery.of(context).size.width * 0.9,
-                constraints: BoxConstraints(
-                  maxHeight: MediaQuery.of(context).size.height * 0.85,
-                ),
-                padding: const EdgeInsets.all(16),
-                child: DefaultTabController(
-                  length: 4,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+        // Lấy tất cả giá trị hiện tại một lần
+        final initialAutoFlipEnabled = ref.read(autoFlipEnabledProvider);
+        final initialAutoFlipFrontDuration =
+            ref.read(autoFlipFrontDurationProvider);
+        final initialAutoFlipBackDuration =
+            ref.read(autoFlipBackDurationProvider);
+
+        final initialTtsEnabled = ref.read(ttsEnabledProvider);
+        final initialTtsAutoPlay = ref.read(ttsAutoPlayProvider);
+        final initialTtsLanguage = ref.read(ttsLanguageProvider);
+
+        final initialFontSizes = Map.from(ref.read(fontSizeProvider));
+        final initialAlignment = ref.read(textAlignmentProvider);
+
+        final initialFrontFields = List<String>.from(
+            (ref.read(studySettingsProvider)['frontFields'] as List?) ??
+                ['vietnamese', 'english']);
+        final initialBackFields = List<String>.from(
+            (ref.read(studySettingsProvider)['backFields'] as List?) ??
+                [
+                  'vietnamese',
+                  'english',
+                  'jpKanji',
+                  'jpReading',
+                  'jpDetailType',
+                  'jpLevel',
+                  'enLevel',
+                  'cnCharacter',
+                  'cnPinyin',
+                  'cnLevel',
+                  'exampleSentence',
+                  'contextNote'
+                ]);
+
+        // Tạo các biến state cho dialog
+        Map<String, dynamic> dialogState = {
+          // Auto-flip
+          'autoFlipEnabled': initialAutoFlipEnabled,
+          'autoFlipFrontDuration': initialAutoFlipFrontDuration,
+          'autoFlipBackDuration': initialAutoFlipBackDuration,
+
+          // TTS
+          'ttsEnabled': initialTtsEnabled,
+          'ttsAutoPlay': initialTtsAutoPlay,
+          'ttsLanguage': initialTtsLanguage,
+
+          // Font
+          'fontSizes': Map.from(initialFontSizes),
+          'alignment': initialAlignment,
+
+          // Customize
+          'frontFields': initialFrontFields,
+          'backFields': initialBackFields,
+        };
+
+        return Dialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Container(
+            width: MediaQuery.of(context).size.width * 0.9,
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(context).size.height * 0.85,
+            ),
+            padding: const EdgeInsets.all(16),
+            child: DefaultTabController(
+              length: 4,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Header
+                  Row(
                     children: [
-                      // Header
-                      Row(
-                        children: [
-                          Icon(Icons.settings,
-                              color: Theme.of(context).primaryColor),
-                          const SizedBox(width: 8),
-                          const Text(
-                            'Settings',
-                            style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const Spacer(),
-                          IconButton(
-                            icon: const Icon(Icons.close),
-                            onPressed: () => Navigator.pop(context),
-                          ),
-                        ],
-                      ),
-                      const Divider(),
-
-                      // Tabs
-                      const TabBar(
-                        tabs: [
-                          Tab(text: 'Auto-Flip'),
-                          Tab(text: 'TTS'),
-                          Tab(text: 'Font Size'),
-                          Tab(text: 'Customize'),
-                        ],
-                      ),
-
-                      const SizedBox(height: 16),
-
-                      // Tab content
-                      Expanded(
-                        child: TabBarView(
-                          children: [
-                            // Tab 0: Auto-Flip Settings
-                            _buildAutoFlipTab(),
-                            // Tab 1: TTS Settings
-                            _buildTtsTab(),
-                            // Tab 2: Font Size Settings
-                            _buildFontSizeTab(),
-                            // Tab 3: Customize Cards Settings
-                            _buildCustomizeTab(),
-                          ],
+                      Icon(Icons.settings,
+                          color: Theme.of(context).primaryColor),
+                      const SizedBox(width: 8),
+                      const Text(
+                        'Settings',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
                         ),
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => Navigator.pop(context),
                       ),
                     ],
                   ),
-                ),
+                  const Divider(),
+
+                  // Tabs
+                  const TabBar(
+                    tabs: [
+                      Tab(text: 'Auto-Flip'),
+                      Tab(text: 'TTS'),
+                      Tab(text: 'Font Size'),
+                      Tab(text: 'Customize'),
+                    ],
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // Tab content - truyền dialogState vào
+                  Expanded(
+                    child: TabBarView(
+                      children: [
+                        _buildAutoFlipTab(context, dialogState),
+                        _buildTtsTab(context, dialogState),
+                        _buildFontSizeTab(context, dialogState),
+                        _buildCustomizeTab(context, dialogState),
+                      ],
+                    ),
+                  ),
+                ],
               ),
-            );
-          },
+            ),
+          ),
         );
       },
     );
@@ -734,18 +775,19 @@ class _StudyPageState extends ConsumerState<StudyPage> {
   // ==================== SETTINGS TABS ====================
   // ==================== AUTO-FLIP TAB ====================
 
-  Widget _buildAutoFlipTab() {
-    final enabled = ref.watch(autoFlipEnabledProvider);
-    final frontDuration = ref.watch(autoFlipFrontDurationProvider);
-    final backDuration = ref.watch(autoFlipBackDurationProvider);
-
+  Widget _buildAutoFlipTab(BuildContext context, Map<String, dynamic> state) {
     return StatefulBuilder(
       builder: (context, setState) {
+        // Lấy giá trị từ state
+        bool enabled = state['autoFlipEnabled'] ?? false;
+        double frontDuration = state['autoFlipFrontDuration'] ?? 3.0;
+        double backDuration = state['autoFlipBackDuration'] ?? 2.0;
+
         return SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Enable/Disable - SỬA LỖI LAG
+              // Enable/Disable
               Container(
                 padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
                 decoration: BoxDecoration(
@@ -775,10 +817,12 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                       value: enabled,
                       onChanged: (value) {
                         setState(() {
-                          ref.read(autoFlipEnabledProvider.notifier).state =
-                              value;
-                          _toggleAutoFlip(value);
+                          state['autoFlipEnabled'] = value;
                         });
+                        ref.read(autoFlipEnabledProvider.notifier).state =
+                            value;
+                        _toggleAutoFlip(value);
+                        _saveAllStudySettings();
                       },
                       activeTrackColor: Colors.blue,
                       activeThumbColor: Colors.blue.shade700,
@@ -789,8 +833,8 @@ class _StudyPageState extends ConsumerState<StudyPage> {
 
               const SizedBox(height: 16),
 
-              // Front duration
               if (enabled) ...[
+                // Front duration
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
@@ -823,12 +867,14 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                   label: '${frontDuration.toStringAsFixed(1)}s',
                   onChanged: (value) {
                     setState(() {
-                      ref.read(autoFlipFrontDurationProvider.notifier).state =
-                          value;
-                      if (enabled) {
-                        _startAutoFlip();
-                      }
+                      state['autoFlipFrontDuration'] = value;
                     });
+                    ref.read(autoFlipFrontDurationProvider.notifier).state =
+                        value;
+                    if (enabled) {
+                      _startAutoFlip();
+                    }
+                    _saveAllStudySettings();
                   },
                   activeColor: Colors.blue,
                 ),
@@ -868,35 +914,15 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                   label: '${backDuration.toStringAsFixed(1)}s',
                   onChanged: (value) {
                     setState(() {
-                      ref.read(autoFlipBackDurationProvider.notifier).state =
-                          value;
-                      if (enabled) {
-                        _startAutoFlip();
-                      }
+                      state['autoFlipBackDuration'] = value;
                     });
+                    ref.read(autoFlipBackDurationProvider.notifier).state =
+                        value;
+                    if (enabled) {
+                      _startAutoFlip();
+                    }
                   },
                   activeColor: Colors.orange,
-                ),
-
-                const SizedBox(height: 8),
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Colors.blue.shade50,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(Icons.info_outline, size: 16, color: Colors.blue),
-                      const SizedBox(width: 8),
-                      const Expanded(
-                        child: Text(
-                          'Front: time to view before flipping. Back: time to view before moving to next card.',
-                          style: TextStyle(fontSize: 12, color: Colors.blue),
-                        ),
-                      ),
-                    ],
-                  ),
                 ),
               ],
             ],
@@ -908,18 +934,18 @@ class _StudyPageState extends ConsumerState<StudyPage> {
 
 // ==================== TTS TAB ====================
 
-  Widget _buildTtsTab() {
-    final enabled = ref.watch(ttsEnabledProvider);
-    final autoPlay = ref.watch(ttsAutoPlayProvider);
-    final currentLanguage = ref.watch(ttsLanguageProvider);
-
+  Widget _buildTtsTab(BuildContext context, Map<String, dynamic> state) {
     return StatefulBuilder(
       builder: (context, setState) {
+        bool enabled = state['ttsEnabled'] ?? true;
+        bool autoPlay = state['ttsAutoPlay'] ?? false;
+        String language = state['ttsLanguage'] ?? 'ja';
+
         return SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Enable/Disable - SỬA LỖI LAG
+              // Enable/Disable
               Container(
                 padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
                 decoration: BoxDecoration(
@@ -949,8 +975,10 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                       value: enabled,
                       onChanged: (value) {
                         setState(() {
-                          ref.read(ttsEnabledProvider.notifier).state = value;
+                          state['ttsEnabled'] = value;
                         });
+                        ref.read(ttsEnabledProvider.notifier).state = value;
+                        _saveAllStudySettings();
                       },
                       activeTrackColor: Colors.green,
                       activeThumbColor: Colors.green.shade700,
@@ -974,9 +1002,11 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                     onChanged: enabled
                         ? (value) {
                             setState(() {
-                              ref.read(ttsAutoPlayProvider.notifier).state =
-                                  value;
+                              state['ttsAutoPlay'] = value;
                             });
+                            ref.read(ttsAutoPlayProvider.notifier).state =
+                                value;
+                            _saveAllStudySettings();
                           }
                         : null,
                     activeTrackColor: Colors.green,
@@ -989,7 +1019,7 @@ class _StudyPageState extends ConsumerState<StudyPage> {
 
               // Language selector
               DropdownButtonFormField<String>(
-                value: currentLanguage,
+                value: language,
                 decoration: const InputDecoration(
                   labelText: 'Language',
                   border: OutlineInputBorder(),
@@ -1002,12 +1032,16 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                 }).toList(),
                 onChanged: enabled
                     ? (value) {
-                        setState(() {
-                          ref.read(ttsLanguageProvider.notifier).state = value!;
+                        if (value != null) {
+                          setState(() {
+                            state['ttsLanguage'] = value;
+                          });
+                          ref.read(ttsLanguageProvider.notifier).state = value;
                           if (_currentCards.isNotEmpty) {
                             _speakCard(_currentCards[_currentIndex], value);
                           }
-                        });
+                          _saveAllStudySettings();
+                        }
                       }
                     : null,
               ),
@@ -1020,10 +1054,7 @@ class _StudyPageState extends ConsumerState<StudyPage> {
 
 // ==================== FONT SIZE TAB ====================
 
-  Widget _buildFontSizeTab() {
-    final fontSizes = ref.watch(fontSizeProvider);
-    final currentAlignment = ref.watch(textAlignmentProvider);
-
+  Widget _buildFontSizeTab(BuildContext context, Map<String, dynamic> state) {
     final List<Map<String, String>> fontOptions = [
       {'key': 'vietnamese', 'label': '🇻🇳 Vietnamese'},
       {'key': 'english', 'label': '🇬🇧 English'},
@@ -1040,182 +1071,178 @@ class _StudyPageState extends ConsumerState<StudyPage> {
       {'key': 'contextNote', 'label': '📌 Note'},
     ];
 
-    return SingleChildScrollView(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Text Alignment
-          const Text(
-            'Text Alignment:',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
+    return StatefulBuilder(
+      builder: (context, setState) {
+        Map<String, double> fontSizes = Map.from(state['fontSizes'] ?? {});
+        TextAlign alignment = state['alignment'] ?? TextAlign.center;
+
+        return SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _buildAlignmentChip(
-                'Left',
-                TextAlign.left,
-                currentAlignment,
-                () {
-                  ref.read(textAlignmentProvider.notifier).state =
-                      TextAlign.left;
-                  _saveTextAlignmentToPrefs(TextAlign.left);
-                  setState(() {});
-                },
+              // Text Alignment
+              const Text(
+                'Text Alignment:',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
-              const SizedBox(width: 8),
-              _buildAlignmentChip(
-                'Center',
-                TextAlign.center,
-                currentAlignment,
-                () {
-                  ref.read(textAlignmentProvider.notifier).state =
-                      TextAlign.center;
-                  _saveTextAlignmentToPrefs(TextAlign.center);
-                  setState(() {});
-                },
-              ),
-              const SizedBox(width: 8),
-              _buildAlignmentChip(
-                'Right',
-                TextAlign.right,
-                currentAlignment,
-                () {
-                  ref.read(textAlignmentProvider.notifier).state =
-                      TextAlign.right;
-                  _saveTextAlignmentToPrefs(TextAlign.right);
-                  setState(() {});
-                },
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 16),
-          const Divider(),
-
-          // Font Sizes
-          const Text(
-            'Font Sizes:',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 8),
-          ...fontOptions.map((option) {
-            final key = option['key']!;
-            final label = option['label']!;
-            final size = fontSizes[key] ?? 16.0;
-
-            return Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4.0),
-              child: Row(
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  SizedBox(
-                    width: 100,
-                    child: Text(
-                      label,
-                      style: const TextStyle(fontSize: 13),
-                    ),
+                  _buildAlignmentChip(
+                    'Left',
+                    TextAlign.left,
+                    alignment,
+                    () {
+                      setState(() {
+                        state['alignment'] = TextAlign.left;
+                      });
+                      ref.read(textAlignmentProvider.notifier).state =
+                          TextAlign.left;
+                      _saveTextAlignmentToPrefs(TextAlign.left);
+                      _saveAllStudySettings();
+                    },
                   ),
-                  Expanded(
-                    child: Slider(
-                      value: size,
-                      min: 10,
-                      max: 40,
-                      divisions: 30,
-                      label: '${size.round()}px',
-                      onChanged: (value) {
-                        final newSizes = Map<String, double>.from(fontSizes);
-                        newSizes[key] = value;
-                        ref.read(fontSizeProvider.notifier).state = newSizes;
-                        _saveFontSizesToPrefs(newSizes);
-                        setState(() {});
-                      },
-                    ),
+                  const SizedBox(width: 8),
+                  _buildAlignmentChip(
+                    'Center',
+                    TextAlign.center,
+                    alignment,
+                    () {
+                      setState(() {
+                        state['alignment'] = TextAlign.center;
+                      });
+                      ref.read(textAlignmentProvider.notifier).state =
+                          TextAlign.center;
+                      _saveTextAlignmentToPrefs(TextAlign.center);
+                      _saveAllStudySettings();
+                    },
                   ),
-                  SizedBox(
-                    width: 40,
-                    child: Text(
-                      '${size.round()}px',
-                      style: const TextStyle(fontSize: 12),
-                      textAlign: TextAlign.right,
-                    ),
+                  const SizedBox(width: 8),
+                  _buildAlignmentChip(
+                    'Right',
+                    TextAlign.right,
+                    alignment,
+                    () {
+                      setState(() {
+                        state['alignment'] = TextAlign.right;
+                      });
+                      ref.read(textAlignmentProvider.notifier).state =
+                          TextAlign.right;
+                      _saveTextAlignmentToPrefs(TextAlign.right);
+                      _saveAllStudySettings();
+                    },
                   ),
                 ],
               ),
-            );
-          }).toList(),
 
-          const SizedBox(height: 8),
-          Center(
-            child: TextButton(
-              onPressed: () {
-                final defaultSizes = <String, double>{
-                  'vietnamese': 28.0,
-                  'english': 20.0,
-                  'jpKanji': 24.0,
-                  'jpReading': 16.0,
-                  'jpDetailType': 16.0,
-                  'jpLevel': 16.0,
-                  'enLevel': 16.0,
-                  'hanViet': 20.0,
-                  'cnCharacter': 24.0,
-                  'cnPinyin': 16.0,
-                  'cnLevel': 16.0,
-                  'exampleSentence': 16.0,
-                  'contextNote': 16.0,
-                };
-                ref.read(fontSizeProvider.notifier).state = defaultSizes;
-                _saveFontSizesToPrefs(defaultSizes);
-                setState(() {});
-              },
-              child: const Text('Reset to Defaults'),
-            ),
+              const SizedBox(height: 16),
+              const Divider(),
+
+              // Font Sizes
+              const Text(
+                'Font Sizes:',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 8),
+              ...fontOptions.map((option) {
+                final key = option['key']!;
+                final label = option['label']!;
+                final size = fontSizes[key] ?? 16.0;
+
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4.0),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 100,
+                        child: Text(
+                          label,
+                          style: const TextStyle(fontSize: 13),
+                        ),
+                      ),
+                      Expanded(
+                        child: Slider(
+                          value: size,
+                          min: 10,
+                          max: 40,
+                          divisions: 30,
+                          label: '${size.round()}px',
+                          onChanged: (value) {
+                            setState(() {
+                              fontSizes[key] = value;
+                              state['fontSizes'] = Map.from(fontSizes);
+                            });
+                            final newSizes =
+                                Map<String, double>.from(fontSizes);
+                            ref.read(fontSizeProvider.notifier).state =
+                                newSizes;
+                            _saveFontSizesToPrefs(newSizes);
+                            _saveAllStudySettings();
+                          },
+                        ),
+                      ),
+                      SizedBox(
+                        width: 40,
+                        child: Text(
+                          '${size.round()}px',
+                          style: const TextStyle(fontSize: 12),
+                          textAlign: TextAlign.right,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }).toList(),
+
+              const SizedBox(height: 8),
+              Center(
+                child: TextButton(
+                  onPressed: () {
+                    final defaultSizes = <String, double>{
+                      'vietnamese': 28.0,
+                      'english': 20.0,
+                      'jpKanji': 24.0,
+                      'jpReading': 16.0,
+                      'jpDetailType': 16.0,
+                      'jpLevel': 16.0,
+                      'enLevel': 16.0,
+                      'hanViet': 20.0,
+                      'cnCharacter': 24.0,
+                      'cnPinyin': 16.0,
+                      'cnLevel': 16.0,
+                      'exampleSentence': 16.0,
+                      'contextNote': 16.0,
+                    };
+                    setState(() {
+                      state['fontSizes'] = Map.from(defaultSizes);
+                      state['alignment'] = TextAlign.center;
+                    });
+                    ref.read(fontSizeProvider.notifier).state = defaultSizes;
+                    ref.read(textAlignmentProvider.notifier).state =
+                        TextAlign.center;
+                    _saveFontSizesToPrefs(defaultSizes);
+                    _saveTextAlignmentToPrefs(TextAlign.center);
+                  },
+                  child: const Text('Reset to Defaults'),
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
 // ==================== CUSTOMIZE TAB ====================
 
-  Widget _buildCustomizeTab() {
-    final settings = ref.watch(studySettingsProvider);
-
-    List<String> frontFields = [];
-    final frontData = settings['frontFields'];
-    if (frontData is List) {
-      frontFields = frontData.whereType<String>().toList();
-    } else {
-      frontFields = ['vietnamese', 'english'];
-    }
-
-    List<String> backFields = [];
-    final backData = settings['backFields'];
-    if (backData is List) {
-      backFields = backData.whereType<String>().toList();
-    } else {
-      backFields = [
-        'vietnamese',
-        'english',
-        'jpKanji',
-        'jpReading',
-        'jpDetailType',
-        'jpLevel',
-        'enLevel',
-        'cnCharacter',
-        'cnPinyin',
-        'cnLevel',
-        'exampleSentence',
-        'contextNote'
-      ];
-    }
-
+  Widget _buildCustomizeTab(BuildContext context, Map<String, dynamic> state) {
     final allFields = [
       'vietnamese',
       'english',
@@ -1252,114 +1279,135 @@ class _StudyPageState extends ConsumerState<StudyPage> {
       'contextNote': '📌 Note',
     };
 
-    return SingleChildScrollView(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            '📖 Front Side',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: Colors.blue,
-            ),
+    return StatefulBuilder(
+      builder: (context, setState) {
+        List<String> frontFields =
+            List.from(state['frontFields'] ?? ['vietnamese', 'english']);
+        List<String> backFields = List.from(state['backFields'] ?? []);
+
+        return SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '📖 Front Side',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.blue,
+                ),
+              ),
+              const SizedBox(height: 8),
+              ...allFields.map((key) {
+                return CheckboxListTile(
+                  title: Text(fieldLabels[key] ?? key),
+                  value: frontFields.contains(key),
+                  onChanged: (checked) {
+                    setState(() {
+                      if (checked == true) {
+                        if (!frontFields.contains(key)) {
+                          frontFields.add(key);
+                        }
+                      } else {
+                        frontFields.remove(key);
+                      }
+                      state['frontFields'] = List.from(frontFields);
+                    });
+                    final newSettings = {
+                      'frontFields': List.from(frontFields),
+                      'backFields': List.from(backFields),
+                    };
+                    ref.read(studySettingsProvider.notifier).state =
+                        newSettings;
+                    _saveSettingsToPrefs(newSettings);
+                    _saveAllStudySettings();
+                  },
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                );
+              }).toList(),
+              const SizedBox(height: 16),
+              const Divider(),
+              const Text(
+                '📖 Back Side',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.green,
+                ),
+              ),
+              const SizedBox(height: 8),
+              ...allFields.map((key) {
+                return CheckboxListTile(
+                  title: Text(fieldLabels[key] ?? key),
+                  value: backFields.contains(key),
+                  onChanged: (checked) {
+                    setState(() {
+                      if (checked == true) {
+                        if (!backFields.contains(key)) {
+                          backFields.add(key);
+                        }
+                      } else {
+                        backFields.remove(key);
+                      }
+                      state['backFields'] = List.from(backFields);
+                    });
+                    final newSettings = {
+                      'frontFields': List.from(frontFields),
+                      'backFields': List.from(backFields),
+                    };
+                    ref.read(studySettingsProvider.notifier).state =
+                        newSettings;
+                    _saveSettingsToPrefs(newSettings);
+                    _saveAllStudySettings();
+                  },
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                );
+              }).toList(),
+              const SizedBox(height: 8),
+              Center(
+                child: TextButton(
+                  onPressed: () {
+                    final defaultFront = ['vietnamese', 'english'];
+                    final defaultBack = [
+                      'vietnamese',
+                      'english',
+                      'jpKanji',
+                      'jpReading',
+                      'jpDetailType',
+                      'jpLevel',
+                      'enLevel',
+                      'cnCharacter',
+                      'cnPinyin',
+                      'cnLevel',
+                      'exampleSentence',
+                      'contextNote'
+                    ];
+                    setState(() {
+                      state['frontFields'] = List.from(defaultFront);
+                      state['backFields'] = List.from(defaultBack);
+                    });
+                    final newSettings = {
+                      'frontFields': defaultFront,
+                      'backFields': defaultBack,
+                    };
+                    ref.read(studySettingsProvider.notifier).state =
+                        newSettings;
+                    _saveSettingsToPrefs(newSettings);
+                  },
+                  child: const Text('Reset to Defaults'),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 8),
-          ...allFields.map((key) {
-            return CheckboxListTile(
-              title: Text(fieldLabels[key] ?? key),
-              value: frontFields.contains(key),
-              onChanged: (checked) {
-                if (checked == true) {
-                  if (!frontFields.contains(key)) {
-                    frontFields.add(key);
-                  }
-                } else {
-                  frontFields.remove(key);
-                }
-                final newSettings = {
-                  'frontFields': List<String>.from(frontFields),
-                  'backFields': List<String>.from(backFields),
-                };
-                ref.read(studySettingsProvider.notifier).state = newSettings;
-                _saveSettingsToPrefs(newSettings);
-                setState(() {});
-              },
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              controlAffinity: ListTileControlAffinity.leading,
-            );
-          }).toList(),
-          const SizedBox(height: 16),
-          const Divider(),
-          const Text(
-            '📖 Back Side',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: Colors.green,
-            ),
-          ),
-          const SizedBox(height: 8),
-          ...allFields.map((key) {
-            return CheckboxListTile(
-              title: Text(fieldLabels[key] ?? key),
-              value: backFields.contains(key),
-              onChanged: (checked) {
-                if (checked == true) {
-                  if (!backFields.contains(key)) {
-                    backFields.add(key);
-                  }
-                } else {
-                  backFields.remove(key);
-                }
-                final newSettings = {
-                  'frontFields': List<String>.from(frontFields),
-                  'backFields': List<String>.from(backFields),
-                };
-                ref.read(studySettingsProvider.notifier).state = newSettings;
-                _saveSettingsToPrefs(newSettings);
-                setState(() {});
-              },
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              controlAffinity: ListTileControlAffinity.leading,
-            );
-          }).toList(),
-          const SizedBox(height: 8),
-          Center(
-            child: TextButton(
-              onPressed: () {
-                final defaultFront = ['vietnamese', 'english'];
-                final defaultBack = [
-                  'vietnamese',
-                  'english',
-                  'jpKanji',
-                  'jpReading',
-                  'jpDetailType',
-                  'jpLevel',
-                  'enLevel',
-                  'cnCharacter',
-                  'cnPinyin',
-                  'cnLevel',
-                  'exampleSentence',
-                  'contextNote'
-                ];
-                final newSettings = {
-                  'frontFields': defaultFront,
-                  'backFields': defaultBack,
-                };
-                ref.read(studySettingsProvider.notifier).state = newSettings;
-                _saveSettingsToPrefs(newSettings);
-                setState(() {});
-              },
-              child: const Text('Reset to Defaults'),
-            ),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
+
   // ==================== BOTTOM CONTROLS ====================
 
   Widget _buildBottomControls() {
@@ -3859,6 +3907,139 @@ class _StudyPageState extends ConsumerState<StudyPage> {
           duration: Duration(seconds: 1),
         ),
       );
+    }
+  }
+
+  // ==================== SAVE / LOAD STUDY SETTINGS ====================
+
+  Future<void> _saveAllStudySettings() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      // Auto-flip
+      await prefs.setBool(
+          'study_autoFlipEnabled', ref.read(autoFlipEnabledProvider));
+      await prefs.setDouble('study_autoFlipFrontDuration',
+          ref.read(autoFlipFrontDurationProvider));
+      await prefs.setDouble(
+          'study_autoFlipBackDuration', ref.read(autoFlipBackDurationProvider));
+
+      // TTS
+      await prefs.setBool('study_ttsEnabled', ref.read(ttsEnabledProvider));
+      await prefs.setBool('study_ttsAutoPlay', ref.read(ttsAutoPlayProvider));
+      await prefs.setString('study_ttsLanguage', ref.read(ttsLanguageProvider));
+
+      // Font Size
+      final fontSizes = ref.read(fontSizeProvider);
+      final fontSizesJson = <String, String>{};
+      fontSizes.forEach((key, value) {
+        fontSizesJson[key] = value.toString();
+      });
+      await prefs.setString('study_fontSizes', fontSizesJson.toString());
+
+      // Text Alignment
+      await prefs.setInt(
+          'study_textAlignment', ref.read(textAlignmentProvider).index);
+
+      // Study Settings (front/back fields)
+      final studySettings = ref.read(studySettingsProvider);
+      await prefs.setStringList('study_frontFields',
+          List<String>.from(studySettings['frontFields'] ?? []));
+      await prefs.setStringList('study_backFields',
+          List<String>.from(studySettings['backFields'] ?? []));
+
+      print('💾 Saved all study settings');
+    } catch (e) {
+      print('❌ Error saving study settings: $e');
+    }
+  }
+
+  Future<void> _loadAllStudySettings() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      // Auto-flip
+      final autoFlipEnabled = prefs.getBool('study_autoFlipEnabled');
+      if (autoFlipEnabled != null) {
+        ref.read(autoFlipEnabledProvider.notifier).state = autoFlipEnabled;
+        if (autoFlipEnabled) {
+          _startAutoFlip();
+        }
+      }
+
+      final frontDuration = prefs.getDouble('study_autoFlipFrontDuration');
+      if (frontDuration != null) {
+        ref.read(autoFlipFrontDurationProvider.notifier).state = frontDuration;
+        _autoFlipFrontDuration = frontDuration;
+      }
+
+      final backDuration = prefs.getDouble('study_autoFlipBackDuration');
+      if (backDuration != null) {
+        ref.read(autoFlipBackDurationProvider.notifier).state = backDuration;
+        _autoFlipBackDuration = backDuration;
+      }
+
+      // TTS
+      final ttsEnabled = prefs.getBool('study_ttsEnabled');
+      if (ttsEnabled != null) {
+        ref.read(ttsEnabledProvider.notifier).state = ttsEnabled;
+      }
+
+      final ttsAutoPlay = prefs.getBool('study_ttsAutoPlay');
+      if (ttsAutoPlay != null) {
+        ref.read(ttsAutoPlayProvider.notifier).state = ttsAutoPlay;
+      }
+
+      final ttsLanguage = prefs.getString('study_ttsLanguage');
+      if (ttsLanguage != null && ttsLanguage.isNotEmpty) {
+        ref.read(ttsLanguageProvider.notifier).state = ttsLanguage;
+      }
+
+      // Font Sizes
+      final fontSizesData = prefs.getString('study_fontSizes');
+      if (fontSizesData != null && fontSizesData.isNotEmpty) {
+        try {
+          final Map<String, double> fontSizes = {};
+          final cleaned = fontSizesData.replaceAll('{', '').replaceAll('}', '');
+          final parts = cleaned.split(', ');
+          for (var part in parts) {
+            final pair = part.split(': ');
+            if (pair.length == 2) {
+              final key = pair[0].trim();
+              final value = double.tryParse(pair[1].trim()) ?? 16.0;
+              fontSizes[key] = value;
+            }
+          }
+          if (fontSizes.isNotEmpty) {
+            ref.read(fontSizeProvider.notifier).state = fontSizes;
+          }
+        } catch (e) {
+          print('❌ Error parsing font sizes: $e');
+        }
+      }
+
+      // Text Alignment
+      final alignmentIndex = prefs.getInt('study_textAlignment');
+      if (alignmentIndex != null && alignmentIndex < TextAlign.values.length) {
+        ref.read(textAlignmentProvider.notifier).state =
+            TextAlign.values[alignmentIndex];
+      }
+
+      // Study Settings (front/back fields)
+      final frontFields = prefs.getStringList('study_frontFields');
+      final backFields = prefs.getStringList('study_backFields');
+
+      if (frontFields != null && backFields != null) {
+        final studySettings = {
+          'frontFields': frontFields,
+          'backFields': backFields,
+        };
+        ref.read(studySettingsProvider.notifier).state = studySettings;
+      }
+
+      print('📂 Loaded all study settings');
+    } catch (e) {
+      print('❌ Error loading study settings: $e');
     }
   }
 }
