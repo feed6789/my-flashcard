@@ -15,6 +15,7 @@ import 'package:flashcard_app/features/flashcard/presentation/widgets/settings_d
 import 'package:flashcard_app/features/study/presentation/pages/study_page.dart';
 import 'package:flashcard_app/core/database/local_database.dart';
 import 'package:flashcard_app/core/providers/auth_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 // ==================== PROVIDERS ====================
 // Settings provider
@@ -188,6 +189,8 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
   int _totalItems = 0;
   bool _isLoadingMore = false;
   final ScrollController _scrollController = ScrollController();
+  // Thêm biến lưu filter hiện tại để khôi phục
+  Map<String, dynamic> _currentFilters = {};
 
   String _sortBy = 'id';
   bool _sortAscending = true;
@@ -259,42 +262,46 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
   void _loadSettings() {
     final settings = ref.read(settingsProvider);
 
-    setState(() {
-      // Load items per page
-      _itemsPerPage = settings['itemsPerPage'] ?? 50;
-      _sortBy = settings['sortBy'] ?? 'id';
-      _sortAscending = settings['sortAscending'] ?? true;
-      _pageSize = _itemsPerPage;
+    // Load từ SharedPreferences trước
+    _loadCurrentPage().then((_) {
+      // Sau khi load trang, load các settings khác
+      setState(() {
+        _itemsPerPage = settings['itemsPerPage'] ?? 50;
+        _pageSize = _itemsPerPage;
 
-      // Load show fields
-      final showFieldsData = settings['showFields'];
-      if (showFieldsData is Map<String, dynamic>) {
-        _showFields = {};
-        showFieldsData.forEach((key, value) {
-          _showFields[key] = value is bool ? value : true;
-        });
-      } else {
-        _showFields = {
-          'vietnamese': true,
-          'english': true,
-          'jpKanji': true,
-          'jpReading': true,
-          'jpType': true,
-          'jpDetailType': true,
-          'jpLevel': true,
-          'enIpa': true,
-          'enLevel': true,
-          'hanViet': true,
-          'cnCharacter': true,
-          'cnPinyin': true,
-          'cnLevel': true,
-          'exampleSentence': true,
-          'contextNote': true,
-        };
-      }
+        // Load show fields
+        final showFieldsData = settings['showFields'];
+        if (showFieldsData is Map<String, dynamic>) {
+          _showFields = {};
+          showFieldsData.forEach((key, value) {
+            _showFields[key] = value is bool ? value : true;
+          });
+        } else {
+          _showFields = {
+            'vietnamese': true,
+            'english': true,
+            'jpKanji': true,
+            'jpReading': true,
+            'jpType': true,
+            'jpDetailType': true,
+            'jpLevel': true,
+            'enIpa': true,
+            'enLevel': true,
+            'hanViet': true,
+            'cnCharacter': true,
+            'cnPinyin': true,
+            'cnLevel': true,
+            'exampleSentence': true,
+            'contextNote': true,
+          };
+        }
 
-      // Load selected filters - QUAN TRỌNG: Chuyển đổi an toàn
-      _selectedFilters = _loadSelectedFiltersSafe(settings);
+        // Load selected filters
+        _selectedFilters = _loadSelectedFiltersSafe(settings);
+      });
+
+      // Load dữ liệu sau khi đã có trang
+      _loadFlashcardsWithFilter();
     });
   }
 
@@ -431,6 +438,7 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
   Future<void> _performSearch(String query, String field) async {
     if (query.isEmpty) {
       setState(() => _isSearching = false);
+      // Reset về trang 1 khi xóa search
       setState(() {
         _currentPage = 0;
         _totalItems = 0;
@@ -441,13 +449,14 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
 
     setState(() => _isSearching = true);
 
-    // Update filter with search query
+    // Update filter với search query và field
     final currentFilters = ref.read(filterProvider);
     final updatedFilters = Map<String, dynamic>.from(currentFilters);
     updatedFilters['searchQuery'] = query;
-    updatedFilters['searchField'] = field; // Thêm field để search
+    updatedFilters['searchField'] = field;
     ref.read(filterProvider.notifier).state = updatedFilters;
 
+    // Reset về trang 1 khi search
     setState(() {
       _currentPage = 0;
       _totalItems = 0;
@@ -455,9 +464,12 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
     _loadFlashcardsWithFilter();
   }
 
-  Future<void> _loadFlashcardsWithFilter() async {
+  Future<void> _loadFlashcardsWithFilter({bool keepPage = false}) async {
     final filters = ref.read(filterProvider);
     final notifier = ref.read(localFlashcardsProvider.notifier);
+
+    // Lưu filter hiện tại
+    _currentFilters = Map.from(filters);
 
     try {
       setState(() => _isLoadingMore = true);
@@ -472,7 +484,9 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
       String sortBy = filters['sortBy'] ?? 'id';
       bool ascending = filters['sortAscending'] ?? true;
 
-      // LUÔN ÁP DỤNG PHÂN TRANG
+      // Tính offset dựa trên trang hiện tại
+      final offset = _currentPage * _pageSize;
+
       final cards = await localDb.getFlashcardsWithFilter(
         jpLevel: filters['jpLevel'],
         enLevel: filters['enLevel'],
@@ -483,10 +497,9 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
         sortBy: sortBy,
         ascending: ascending,
         limit: _pageSize,
-        offset: _currentPage * _pageSize,
+        offset: offset,
       );
 
-      // Đếm tổng số để biết có bao nhiêu trang
       final total = await localDb.countFlashcardsWithFilter(
         jpLevel: filters['jpLevel'],
         enLevel: filters['enLevel'],
@@ -498,14 +511,16 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
 
       setState(() {
         _totalItems = total;
-        // QUAN TRỌNG: Cập nhật state với cards mới, KHÔNG append
         notifier.state = cards;
         _isLoadingMore = false;
         _isSearching = false;
       });
 
+      // LƯU TRANG HIỆN TẠI SAU KHI LOAD THÀNH CÔNG
+      await _saveCurrentPage();
+
       print(
-          '📊 Loaded ${cards.length} cards (total: $total, page: ${_currentPage + 1})');
+          '📊 Loaded ${cards.length} cards (total: $total, page: ${_currentPage + 1}, offset: $offset)');
     } catch (e) {
       print('❌ Error loading with filter: $e');
       setState(() {
@@ -875,6 +890,7 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                           child: const Text('Cancel'),
                         ),
                         const SizedBox(width: 8),
+                        // Trong _showSettingsDialog, phần onPressed của Apply button
                         ElevatedButton(
                           onPressed: () {
                             // Lưu settings
@@ -895,9 +911,11 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                               _sortBy = sortBy;
                               _sortAscending = sortAscending;
                               _showFields = Map<String, bool>.from(showFields);
-                              _currentPage = 0;
-                              _totalItems = 0;
+                              // KHÔNG reset _currentPage
                             });
+
+                            // Lưu page size vào SharedPreferences
+                            _saveCurrentPage();
 
                             // Cập nhật filter
                             final currentFilter = ref.read(filterProvider);
@@ -909,7 +927,7 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                                 updatedFilter;
 
                             Navigator.pop(context);
-                            _loadFlashcardsWithFilter();
+                            _loadFlashcardsWithFilter(keepPage: true);
                           },
                           child: const Text('Apply'),
                         ),
@@ -1163,11 +1181,8 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                   break;
                 case 'refresh':
                   ref.invalidate(supabaseFlashcardsProvider);
-                  setState(() {
-                    _currentPage = 0;
-                    _totalItems = 0;
-                  });
-                  _loadFlashcardsWithFilter();
+                  // KHÔNG reset _currentPage về 0
+                  _loadFlashcardsWithFilter(keepPage: true);
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
                       content: Text('🔄 Refreshing data...'),
@@ -1286,12 +1301,7 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                     ),
                   ),
                 ).then((_) {
-                  // Khi quay lại, refresh dữ liệu
-                  setState(() {
-                    _currentPage = 0;
-                    _totalItems = 0;
-                  });
-                  _loadFlashcardsWithFilter();
+                  _loadFlashcardsWithFilter(keepPage: true);
                 });
               },
               tooltip: 'Study flashcards',
@@ -1362,77 +1372,6 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
   }
 
   // ==================== BUILD TABS ====================
-
-  // Widget _buildSupabaseTab(AsyncValue<List<Flashcard>> supabaseCards) {
-  //   return supabaseCards.when(
-  //     data: (cards) {
-  //       if (cards.isEmpty) {
-  //         return const Center(
-  //           child: Column(
-  //             mainAxisAlignment: MainAxisAlignment.center,
-  //             children: [
-  //               Icon(Icons.cloud_off, size: 64, color: Colors.grey),
-  //               SizedBox(height: 16),
-  //               Text(
-  //                 'No flashcards on server',
-  //                 style: TextStyle(fontSize: 18, color: Colors.grey),
-  //               ),
-  //               SizedBox(height: 8),
-  //               Text(
-  //                 'Read-only data from Supabase',
-  //                 style: TextStyle(fontSize: 14, color: Colors.grey),
-  //               ),
-  //             ],
-  //           ),
-  //         );
-  //       }
-  //       return ListView.builder(
-  //         padding: const EdgeInsets.all(16),
-  //         itemCount: cards.length,
-  //         itemBuilder: (context, index) {
-  //           final card = cards[index];
-  //           return FlashcardCard(
-  //             card: card,
-  //             isReadOnly: true,
-  //             onDelete: null,
-  //             onEdit: null,
-  //           );
-  //         },
-  //       );
-  //     },
-  //     loading: () => const Center(
-  //       child: Column(
-  //         mainAxisAlignment: MainAxisAlignment.center,
-  //         children: [
-  //           CircularProgressIndicator(),
-  //           SizedBox(height: 16),
-  //           Text('Loading from Supabase...'),
-  //         ],
-  //       ),
-  //     ),
-  //     error: (error, stack) => Center(
-  //       child: Column(
-  //         mainAxisAlignment: MainAxisAlignment.center,
-  //         children: [
-  //           Icon(Icons.error_outline, size: 64, color: Colors.red.shade300),
-  //           const SizedBox(height: 16),
-  //           Text(
-  //             'Error: ${error.toString().replaceFirst('Exception: ', '')}',
-  //             style: const TextStyle(color: Colors.red),
-  //             textAlign: TextAlign.center,
-  //           ),
-  //           const SizedBox(height: 16),
-  //           ElevatedButton(
-  //             onPressed: () {
-  //               ref.invalidate(supabaseFlashcardsProvider);
-  //             },
-  //             child: const Text('Retry'),
-  //           ),
-  //         ],
-  //       ),
-  //     ),
-  //   );
-  // }
 
   Widget _buildLocalTab(List<Flashcard> localCards) {
     // Kiểm tra có filter không
@@ -1605,8 +1544,6 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
   }
 
   List<int> _getPageNumbers() {
-    if (_totalItems == 0) return [0];
-
     final totalPages = (_totalItems / _pageSize).ceil();
     if (totalPages <= 7) {
       return List.generate(totalPages, (i) => i);
@@ -2203,7 +2140,7 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                             ref.read(filterProvider.notifier).state = filterMap;
                             Navigator.pop(context);
 
-                            // Áp dụng filter
+                            // Áp dụng filter - RESET về trang 1 khi thay đổi filter
                             setState(() {
                               _currentPage = 0;
                               _totalItems = 0;
@@ -3261,6 +3198,43 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
           duration: Duration(seconds: 1),
         ),
       );
+    }
+  }
+
+  // ==================== SAVE / LOAD PAGE STATE ====================
+
+  Future<void> _saveCurrentPage() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt('current_page', _currentPage);
+      await prefs.setInt('page_size', _pageSize);
+      print('💾 Saved page state: page $_currentPage, size $_pageSize');
+    } catch (e) {
+      print('❌ Error saving page state: $e');
+    }
+  }
+
+  Future<void> _loadCurrentPage() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedPage = prefs.getInt('current_page');
+      final savedSize = prefs.getInt('page_size');
+
+      if (savedPage != null) {
+        setState(() {
+          _currentPage = savedPage;
+        });
+        print('📂 Loaded page state: page $_currentPage');
+      }
+
+      if (savedSize != null) {
+        setState(() {
+          _pageSize = savedSize;
+          _itemsPerPage = savedSize;
+        });
+      }
+    } catch (e) {
+      print('❌ Error loading page state: $e');
     }
   }
 }
