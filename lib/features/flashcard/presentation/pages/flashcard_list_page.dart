@@ -472,6 +472,7 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
       String sortBy = filters['sortBy'] ?? 'id';
       bool ascending = filters['sortAscending'] ?? true;
 
+      // LUÔN ÁP DỤNG PHÂN TRANG
       final cards = await localDb.getFlashcardsWithFilter(
         jpLevel: filters['jpLevel'],
         enLevel: filters['enLevel'],
@@ -485,6 +486,7 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
         offset: _currentPage * _pageSize,
       );
 
+      // Đếm tổng số để biết có bao nhiêu trang
       final total = await localDb.countFlashcardsWithFilter(
         jpLevel: filters['jpLevel'],
         enLevel: filters['enLevel'],
@@ -496,15 +498,8 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
 
       setState(() {
         _totalItems = total;
-        if (_currentPage == 0) {
-          notifier.state = cards;
-          // CẬP NHẬT PROVIDER
-          ref.read(filteredFlashcardsProvider.notifier).state = cards;
-        } else {
-          notifier.state = [...notifier.state, ...cards];
-          // CẬP NHẬT PROVIDER
-          ref.read(filteredFlashcardsProvider.notifier).state = notifier.state;
-        }
+        // QUAN TRỌNG: Cập nhật state với cards mới, KHÔNG append
+        notifier.state = cards;
         _isLoadingMore = false;
         _isSearching = false;
       });
@@ -1557,7 +1552,7 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                           setState(() {
                             _currentPage--;
                           });
-                          _loadFlashcardsWithFilter();
+                          _loadFlashcardsWithFilter(); // Load lại trang mới
                         }
                       : null,
                 ),
@@ -1578,7 +1573,7 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                           setState(() {
                             _currentPage = page;
                           });
-                          _loadFlashcardsWithFilter();
+                          _loadFlashcardsWithFilter(); // Load lại trang mới
                         }
                       },
                     ),
@@ -1591,7 +1586,7 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                           setState(() {
                             _currentPage++;
                           });
-                          _loadFlashcardsWithFilter();
+                          _loadFlashcardsWithFilter(); // Load lại trang mới
                         }
                       : null,
                 ),
@@ -1610,6 +1605,8 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
   }
 
   List<int> _getPageNumbers() {
+    if (_totalItems == 0) return [0];
+
     final totalPages = (_totalItems / _pageSize).ceil();
     if (totalPages <= 7) {
       return List.generate(totalPages, (i) => i);

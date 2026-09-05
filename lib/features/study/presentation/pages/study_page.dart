@@ -780,7 +780,8 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                           _toggleAutoFlip(value);
                         });
                       },
-                      activeColor: Colors.blue,
+                      activeTrackColor: Colors.blue,
+                      activeThumbColor: Colors.blue.shade700,
                     ),
                   ],
                 ),
@@ -951,7 +952,8 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                           ref.read(ttsEnabledProvider.notifier).state = value;
                         });
                       },
-                      activeColor: Colors.green,
+                      activeTrackColor: Colors.green,
+                      activeThumbColor: Colors.green.shade700,
                     ),
                   ],
                 ),
@@ -977,7 +979,8 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                             });
                           }
                         : null,
-                    activeColor: Colors.green,
+                    activeTrackColor: Colors.green,
+                    activeThumbColor: Colors.green.shade700,
                   ),
                 ],
               ),
@@ -1408,7 +1411,8 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                         );
                       }
                     },
-                    activeColor: Colors.purple,
+                    activeTrackColor: Colors.purple,
+                    activeThumbColor: Colors.purple.shade700,
                   ),
                 ],
               ),
@@ -1482,7 +1486,8 @@ class _StudyPageState extends ConsumerState<StudyPage> {
               Switch(
                 value: _isShuffled,
                 onChanged: _toggleShuffle,
-                activeColor: Colors.orange,
+                activeTrackColor: Colors.orange,
+                activeThumbColor: Colors.orange.shade700,
               ),
               const SizedBox(width: 8),
               Text(
@@ -3131,7 +3136,8 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                               }
                             });
                           },
-                          activeColor: Colors.green,
+                          activeTrackColor: Colors.deepPurple,
+                          activeThumbColor: Colors.deepPurple.shade700,
                         ),
                       ],
                     ),
