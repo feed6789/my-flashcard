@@ -2,6 +2,7 @@
 
 import 'dart:async';
 
+import 'package:flashcard_app/core/providers/theme_provider.dart';
 import 'package:flip_card/flip_card_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -111,6 +112,8 @@ class _StudyPageState extends ConsumerState<StudyPage> {
   // Page Controller
   late PageController _pageController;
   int _currentIndex = 0;
+  bool _isInitialized = false;
+  bool _isDisposed = false;
 
   // Flip Card Controllers
   final Map<int, FlipCardController> _controllers = {};
@@ -169,34 +172,32 @@ class _StudyPageState extends ConsumerState<StudyPage> {
   void initState() {
     super.initState();
 
-    // 1. Khởi tạo PageController TRƯỚC
     _currentIndex = widget.initialIndex.clamp(0, widget.flashcards.length - 1);
     _pageController = PageController(initialPage: _currentIndex);
-
-    // 2. Khởi tạo danh sách hiển thị từ widget.flashcards
     _displayCards = List<Flashcard>.from(widget.flashcards);
 
-    // 3. Khởi tạo controllers
     for (int i = 0; i < _displayCards.length; i++) {
       _controllers[i] = FlipCardController();
     }
 
-    // 4. LOAD TẤT CẢ SETTINGS TỪ SHAREDPREFERENCES
-    _loadAllStudySettings().then((_) {
-      // Sau khi load settings xong, load dữ liệu từ database
-      WidgetsBinding.instance.addPostFrameCallback((_) {
+    _isDisposed = false;
+
+    // Load settings
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_isDisposed && mounted) {
+        _loadAllStudySettings();
         _loadDataFromDatabase();
-      });
+      }
     });
   }
 
   @override
   void dispose() {
+    _autoFlipTimer?.cancel();
+    _autoFlipTimer = null;
     _pageController.dispose();
-    _stopAutoFlip();
-    _stopTts();
-    _audioPlayer.dispose();
-    _saveAllStudySettings();
+    _isDisposed = true;
+    // KHÔNG gọi _saveAllStudySettings() ở đây
     super.dispose();
   }
 
@@ -221,16 +222,16 @@ class _StudyPageState extends ConsumerState<StudyPage> {
   }
 
   Future<void> _loadDataFromDatabase() async {
+    if (_isDisposed || !mounted) return;
+
     try {
       final localDb = LocalDatabase();
       final allCards = await localDb.getAllFlashcards();
 
-      // Lọc danh sách theo ID của widget.flashcards
       final filteredIds = widget.flashcards.map((c) => c.id).toSet();
       final filteredCards =
           allCards.where((c) => filteredIds.contains(c.id)).toList();
 
-      // Sắp xếp theo thứ tự của widget.flashcards
       final orderMap = <String, int>{};
       for (int i = 0; i < widget.flashcards.length; i++) {
         orderMap[widget.flashcards[i].id] = i;
@@ -238,19 +239,19 @@ class _StudyPageState extends ConsumerState<StudyPage> {
       filteredCards
           .sort((a, b) => (orderMap[a.id] ?? 0).compareTo(orderMap[b.id] ?? 0));
 
-      setState(() {
-        _displayCards = List<Flashcard>.from(filteredCards);
-        _isShuffled = false;
-        _currentIndex = 0;
-      });
+      if (!_isDisposed && mounted) {
+        setState(() {
+          _displayCards = List<Flashcard>.from(filteredCards);
+          _isShuffled = false;
+          _currentIndex = 0;
+        });
+      }
 
-      // Kiểm tra _pageController đã được khởi tạo chưa
       _controllers.clear();
       for (int i = 0; i < _displayCards.length; i++) {
         _controllers[i] = FlipCardController();
       }
 
-      // Chỉ gọi jumpToPage nếu _pageController đã được khởi tạo
       if (_pageController.hasClients) {
         _pageController.jumpToPage(0);
       }
@@ -258,9 +259,11 @@ class _StudyPageState extends ConsumerState<StudyPage> {
       print('✅ Loaded ${_displayCards.length} cards from database');
     } catch (e) {
       print('❌ Error loading data: $e');
-      setState(() {
-        _displayCards = List<Flashcard>.from(widget.flashcards);
-      });
+      if (!_isDisposed && mounted) {
+        setState(() {
+          _displayCards = List<Flashcard>.from(widget.flashcards);
+        });
+      }
     }
   }
 
@@ -644,69 +647,48 @@ class _StudyPageState extends ConsumerState<StudyPage> {
   }
 
   void _showAllSettingsDialog(BuildContext context) {
+    // ĐỌC TẤT CẢ GIÁ TRỊ MỘT LẦN DUY NHẤT Ở BÊN NGOÀI
+    final initialFrontFields = List<String>.from(
+        (ref.read(studySettingsProvider)['frontFields'] as List?) ??
+            ['vietnamese', 'english']);
+    final initialBackFields = List<String>.from(
+        (ref.read(studySettingsProvider)['backFields'] as List?) ??
+            [
+              'vietnamese',
+              'english',
+              'jpKanji',
+              'jpReading',
+              'jpDetailType',
+              'jpLevel',
+              'enLevel',
+              'cnCharacter',
+              'cnPinyin',
+              'cnLevel',
+              'exampleSentence',
+              'contextNote'
+            ]);
+
+    // Tạo state cho dialog - KHÔNG dùng ref.watch() bên trong
+    Map<String, dynamic> dialogState = {
+      'autoFlipEnabled': ref.read(autoFlipEnabledProvider),
+      'autoFlipFrontDuration': ref.read(autoFlipFrontDurationProvider),
+      'autoFlipBackDuration': ref.read(autoFlipBackDurationProvider),
+      'ttsEnabled': ref.read(ttsEnabledProvider),
+      'ttsAutoPlay': ref.read(ttsAutoPlayProvider),
+      'ttsLanguage': ref.read(ttsLanguageProvider),
+      'fontSizes': Map.from(ref.read(fontSizeProvider)),
+      'alignment': ref.read(textAlignmentProvider),
+      'frontFields': initialFrontFields,
+      'backFields': initialBackFields,
+    };
+
     showDialog(
       context: context,
       barrierDismissible: true,
       builder: (context) {
-        // Lấy tất cả giá trị hiện tại một lần
-        final initialAutoFlipEnabled = ref.read(autoFlipEnabledProvider);
-        final initialAutoFlipFrontDuration =
-            ref.read(autoFlipFrontDurationProvider);
-        final initialAutoFlipBackDuration =
-            ref.read(autoFlipBackDurationProvider);
-
-        final initialTtsEnabled = ref.read(ttsEnabledProvider);
-        final initialTtsAutoPlay = ref.read(ttsAutoPlayProvider);
-        final initialTtsLanguage = ref.read(ttsLanguageProvider);
-
-        final initialFontSizes = Map.from(ref.read(fontSizeProvider));
-        final initialAlignment = ref.read(textAlignmentProvider);
-
-        final initialFrontFields = List<String>.from(
-            (ref.read(studySettingsProvider)['frontFields'] as List?) ??
-                ['vietnamese', 'english']);
-        final initialBackFields = List<String>.from(
-            (ref.read(studySettingsProvider)['backFields'] as List?) ??
-                [
-                  'vietnamese',
-                  'english',
-                  'jpKanji',
-                  'jpReading',
-                  'jpDetailType',
-                  'jpLevel',
-                  'enLevel',
-                  'cnCharacter',
-                  'cnPinyin',
-                  'cnLevel',
-                  'exampleSentence',
-                  'contextNote'
-                ]);
-
-        // Tạo các biến state cho dialog
-        Map<String, dynamic> dialogState = {
-          // Auto-flip
-          'autoFlipEnabled': initialAutoFlipEnabled,
-          'autoFlipFrontDuration': initialAutoFlipFrontDuration,
-          'autoFlipBackDuration': initialAutoFlipBackDuration,
-
-          // TTS
-          'ttsEnabled': initialTtsEnabled,
-          'ttsAutoPlay': initialTtsAutoPlay,
-          'ttsLanguage': initialTtsLanguage,
-
-          // Font
-          'fontSizes': Map.from(initialFontSizes),
-          'alignment': initialAlignment,
-
-          // Customize
-          'frontFields': initialFrontFields,
-          'backFields': initialBackFields,
-        };
-
         return Dialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           child: Container(
             width: MediaQuery.of(context).size.width * 0.9,
             constraints: BoxConstraints(
@@ -724,23 +706,20 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                       Icon(Icons.settings,
                           color: Theme.of(context).primaryColor),
                       const SizedBox(width: 8),
-                      const Text(
-                        'Settings',
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
+                      const Text('Settings',
+                          style: TextStyle(
+                              fontSize: 20, fontWeight: FontWeight.bold)),
                       const Spacer(),
                       IconButton(
                         icon: const Icon(Icons.close),
-                        onPressed: () => Navigator.pop(context),
+                        onPressed: () {
+                          // KHÔNG gọi _saveAllStudySettings() ở đây
+                          Navigator.pop(context);
+                        },
                       ),
                     ],
                   ),
                   const Divider(),
-
-                  // Tabs
                   const TabBar(
                     tabs: [
                       Tab(text: 'Auto-Flip'),
@@ -749,10 +728,7 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                       Tab(text: 'Customize'),
                     ],
                   ),
-
                   const SizedBox(height: 16),
-
-                  // Tab content - truyền dialogState vào
                   Expanded(
                     child: TabBarView(
                       children: [
@@ -778,7 +754,6 @@ class _StudyPageState extends ConsumerState<StudyPage> {
   Widget _buildAutoFlipTab(BuildContext context, Map<String, dynamic> state) {
     return StatefulBuilder(
       builder: (context, setState) {
-        // Lấy giá trị từ state
         bool enabled = state['autoFlipEnabled'] ?? false;
         double frontDuration = state['autoFlipFrontDuration'] ?? 3.0;
         double backDuration = state['autoFlipBackDuration'] ?? 2.0;
@@ -787,7 +762,6 @@ class _StudyPageState extends ConsumerState<StudyPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Enable/Disable
               Container(
                 padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
                 decoration: BoxDecoration(
@@ -819,10 +793,12 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                         setState(() {
                           state['autoFlipEnabled'] = value;
                         });
-                        ref.read(autoFlipEnabledProvider.notifier).state =
-                            value;
-                        _toggleAutoFlip(value);
-                        _saveAllStudySettings();
+                        // CHỈ GỌI KHI WIDGET CÒN MOUNTED
+                        if (mounted) {
+                          ref.read(autoFlipEnabledProvider.notifier).state =
+                              value;
+                          _toggleAutoFlip(value);
+                        }
                       },
                       activeTrackColor: Colors.blue,
                       activeThumbColor: Colors.blue.shade700,
@@ -830,18 +806,12 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                   ],
                 ),
               ),
-
               const SizedBox(height: 16),
-
               if (enabled) ...[
-                // Front duration
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text(
-                      '⏱️ Front Side Duration:',
-                      style: TextStyle(fontWeight: FontWeight.w500),
-                    ),
+                    const Text('⏱️ Front Side Duration:'),
                     Container(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 12, vertical: 4),
@@ -869,26 +839,21 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                     setState(() {
                       state['autoFlipFrontDuration'] = value;
                     });
-                    ref.read(autoFlipFrontDurationProvider.notifier).state =
-                        value;
-                    if (enabled) {
-                      _startAutoFlip();
+                    if (mounted) {
+                      ref.read(autoFlipFrontDurationProvider.notifier).state =
+                          value;
+                      if (enabled) {
+                        _startAutoFlip();
+                      }
                     }
-                    _saveAllStudySettings();
                   },
                   activeColor: Colors.blue,
                 ),
-
                 const SizedBox(height: 16),
-
-                // Back duration
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text(
-                      '⏱️ Back Side Duration:',
-                      style: TextStyle(fontWeight: FontWeight.w500),
-                    ),
+                    const Text('⏱️ Back Side Duration:'),
                     Container(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 12, vertical: 4),
@@ -916,10 +881,12 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                     setState(() {
                       state['autoFlipBackDuration'] = value;
                     });
-                    ref.read(autoFlipBackDurationProvider.notifier).state =
-                        value;
-                    if (enabled) {
-                      _startAutoFlip();
+                    if (mounted) {
+                      ref.read(autoFlipBackDurationProvider.notifier).state =
+                          value;
+                      if (enabled) {
+                        _startAutoFlip();
+                      }
                     }
                   },
                   activeColor: Colors.orange,
@@ -977,8 +944,10 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                         setState(() {
                           state['ttsEnabled'] = value;
                         });
-                        ref.read(ttsEnabledProvider.notifier).state = value;
-                        _saveAllStudySettings();
+                        if (mounted) {
+                          ref.read(ttsEnabledProvider.notifier).state = value;
+                          _saveAllStudySettings();
+                        }
                       },
                       activeTrackColor: Colors.green,
                       activeThumbColor: Colors.green.shade700,
@@ -1004,9 +973,11 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                             setState(() {
                               state['ttsAutoPlay'] = value;
                             });
-                            ref.read(ttsAutoPlayProvider.notifier).state =
-                                value;
-                            _saveAllStudySettings();
+                            if (mounted) {
+                              ref.read(ttsAutoPlayProvider.notifier).state =
+                                  value;
+                              _saveAllStudySettings();
+                            }
                           }
                         : null,
                     activeTrackColor: Colors.green,
@@ -1030,20 +1001,18 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                     child: Text(entry.value),
                   );
                 }).toList(),
-                onChanged: enabled
-                    ? (value) {
-                        if (value != null) {
-                          setState(() {
-                            state['ttsLanguage'] = value;
-                          });
-                          ref.read(ttsLanguageProvider.notifier).state = value;
-                          if (_currentCards.isNotEmpty) {
-                            _speakCard(_currentCards[_currentIndex], value);
-                          }
-                          _saveAllStudySettings();
-                        }
-                      }
-                    : null,
+                onChanged: (value) {
+                  if (value == null) return;
+                  setState(() {
+                    state['ttsLanguage'] = value;
+                  });
+                  if (mounted) {
+                    ref.read(ttsLanguageProvider.notifier).state = value;
+                    if (_currentCards.isNotEmpty) {
+                      _speakCard(_currentCards[_currentIndex], value);
+                    }
+                  }
+                },
               ),
             ],
           ),
@@ -1100,10 +1069,12 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                       setState(() {
                         state['alignment'] = TextAlign.left;
                       });
-                      ref.read(textAlignmentProvider.notifier).state =
-                          TextAlign.left;
-                      _saveTextAlignmentToPrefs(TextAlign.left);
-                      _saveAllStudySettings();
+                      if (mounted) {
+                        ref.read(textAlignmentProvider.notifier).state =
+                            TextAlign.left;
+                        _saveTextAlignmentToPrefs(TextAlign.left);
+                        _saveAllStudySettings();
+                      }
                     },
                   ),
                   const SizedBox(width: 8),
@@ -1115,10 +1086,12 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                       setState(() {
                         state['alignment'] = TextAlign.center;
                       });
-                      ref.read(textAlignmentProvider.notifier).state =
-                          TextAlign.center;
-                      _saveTextAlignmentToPrefs(TextAlign.center);
-                      _saveAllStudySettings();
+                      if (mounted) {
+                        ref.read(textAlignmentProvider.notifier).state =
+                            TextAlign.center;
+                        _saveTextAlignmentToPrefs(TextAlign.center);
+                        _saveAllStudySettings();
+                      }
                     },
                   ),
                   const SizedBox(width: 8),
@@ -1130,10 +1103,12 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                       setState(() {
                         state['alignment'] = TextAlign.right;
                       });
-                      ref.read(textAlignmentProvider.notifier).state =
-                          TextAlign.right;
-                      _saveTextAlignmentToPrefs(TextAlign.right);
-                      _saveAllStudySettings();
+                      if (mounted) {
+                        ref.read(textAlignmentProvider.notifier).state =
+                            TextAlign.right;
+                        _saveTextAlignmentToPrefs(TextAlign.right);
+                        _saveAllStudySettings();
+                      }
                     },
                   ),
                 ],
@@ -1155,7 +1130,6 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                 final key = option['key']!;
                 final label = option['label']!;
                 final size = fontSizes[key] ?? 16.0;
-
                 return Padding(
                   padding: const EdgeInsets.symmetric(vertical: 4.0),
                   child: Row(
@@ -1179,12 +1153,14 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                               fontSizes[key] = value;
                               state['fontSizes'] = Map.from(fontSizes);
                             });
-                            final newSizes =
-                                Map<String, double>.from(fontSizes);
-                            ref.read(fontSizeProvider.notifier).state =
-                                newSizes;
-                            _saveFontSizesToPrefs(newSizes);
-                            _saveAllStudySettings();
+                            if (mounted) {
+                              final newSizes =
+                                  Map<String, double>.from(fontSizes);
+                              ref.read(fontSizeProvider.notifier).state =
+                                  newSizes;
+                              _saveFontSizesToPrefs(newSizes);
+                              _saveAllStudySettings();
+                            }
                           },
                         ),
                       ),
@@ -1224,11 +1200,14 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                       state['fontSizes'] = Map.from(defaultSizes);
                       state['alignment'] = TextAlign.center;
                     });
-                    ref.read(fontSizeProvider.notifier).state = defaultSizes;
-                    ref.read(textAlignmentProvider.notifier).state =
-                        TextAlign.center;
-                    _saveFontSizesToPrefs(defaultSizes);
-                    _saveTextAlignmentToPrefs(TextAlign.center);
+                    if (mounted) {
+                      ref.read(fontSizeProvider.notifier).state = defaultSizes;
+                      ref.read(textAlignmentProvider.notifier).state =
+                          TextAlign.center;
+                      _saveFontSizesToPrefs(defaultSizes);
+                      _saveTextAlignmentToPrefs(TextAlign.center);
+                      _saveAllStudySettings();
+                    }
                   },
                   child: const Text('Reset to Defaults'),
                 ),
@@ -1281,6 +1260,7 @@ class _StudyPageState extends ConsumerState<StudyPage> {
 
     return StatefulBuilder(
       builder: (context, setState) {
+        // Lấy từ state đã truyền vào, KHÔNG dùng ref.watch()
         List<String> frontFields =
             List.from(state['frontFields'] ?? ['vietnamese', 'english']);
         List<String> backFields = List.from(state['backFields'] ?? []);
@@ -1289,6 +1269,7 @@ class _StudyPageState extends ConsumerState<StudyPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // Front Side
               const Text(
                 '📖 Front Side',
                 style: TextStyle(
@@ -1298,37 +1279,101 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                 ),
               ),
               const SizedBox(height: 8),
-              ...allFields.map((key) {
-                return CheckboxListTile(
-                  title: Text(fieldLabels[key] ?? key),
-                  value: frontFields.contains(key),
-                  onChanged: (checked) {
-                    setState(() {
-                      if (checked == true) {
-                        if (!frontFields.contains(key)) {
-                          frontFields.add(key);
-                        }
-                      } else {
-                        frontFields.remove(key);
-                      }
-                      state['frontFields'] = List.from(frontFields);
-                    });
-                    final newSettings = {
-                      'frontFields': List.from(frontFields),
-                      'backFields': List.from(backFields),
-                    };
-                    ref.read(studySettingsProvider.notifier).state =
-                        newSettings;
-                    _saveSettingsToPrefs(newSettings);
-                    _saveAllStudySettings();
-                  },
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  controlAffinity: ListTileControlAffinity.leading,
+
+              ...frontFields.map((key) {
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 4),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.blue.shade50,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                                color: Colors.blue.shade200, width: 1),
+                          ),
+                          child: Text(fieldLabels[key] ?? key,
+                              style: const TextStyle(fontSize: 14)),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close,
+                            size: 18, color: Colors.red),
+                        onPressed: () {
+                          setState(() {
+                            frontFields.remove(key);
+                            state['frontFields'] = List.from(frontFields);
+                          });
+                          if (mounted) {
+                            final newSettings = {
+                              'frontFields': List.from(frontFields),
+                              'backFields': List.from(backFields),
+                            };
+                            ref.read(studySettingsProvider.notifier).state =
+                                newSettings;
+                            // ⭐ GỌI CẢ 2 HÀM LƯU
+                            _saveSettingsToPrefs(newSettings);
+                            _saveAllStudySettings();
+                          }
+                        },
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                      ),
+                    ],
+                  ),
                 );
               }).toList(),
+
+              // Dropdown thêm field
+              if (frontFields.length < allFields.length)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.grey.shade300),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      hint: const Text('+ Add field to front'),
+                      value: null,
+                      isExpanded: true,
+                      items: allFields
+                          .where((field) => !frontFields.contains(field))
+                          .map((field) {
+                        return DropdownMenuItem(
+                          value: field,
+                          child: Text(fieldLabels[field] ?? field),
+                        );
+                      }).toList(),
+                      onChanged: (value) {
+                        if (value != null) {
+                          setState(() {
+                            frontFields.add(value);
+                            state['frontFields'] = List.from(frontFields);
+                          });
+                          // ✅ THÊM KIỂM TRA MOUNTED
+                          if (mounted) {
+                            final newSettings = {
+                              'frontFields': List.from(frontFields),
+                              'backFields': List.from(backFields),
+                            };
+                            ref.read(studySettingsProvider.notifier).state =
+                                newSettings;
+                            _saveSettingsToPrefs(newSettings);
+                          }
+                        }
+                      },
+                    ),
+                  ),
+                ),
+
               const SizedBox(height: 16),
               const Divider(),
+
+              // Back Side
               const Text(
                 '📖 Back Side',
                 style: TextStyle(
@@ -1338,36 +1383,123 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                 ),
               ),
               const SizedBox(height: 8),
-              ...allFields.map((key) {
-                return CheckboxListTile(
-                  title: Text(fieldLabels[key] ?? key),
-                  value: backFields.contains(key),
-                  onChanged: (checked) {
-                    setState(() {
-                      if (checked == true) {
-                        if (!backFields.contains(key)) {
-                          backFields.add(key);
-                        }
-                      } else {
-                        backFields.remove(key);
-                      }
-                      state['backFields'] = List.from(backFields);
-                    });
-                    final newSettings = {
-                      'frontFields': List.from(frontFields),
-                      'backFields': List.from(backFields),
-                    };
-                    ref.read(studySettingsProvider.notifier).state =
-                        newSettings;
-                    _saveSettingsToPrefs(newSettings);
-                    _saveAllStudySettings();
-                  },
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  controlAffinity: ListTileControlAffinity.leading,
+
+              ...backFields.map((key) {
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 4),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.green.shade50,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                                color: Colors.green.shade200, width: 1),
+                          ),
+                          child: Text(fieldLabels[key] ?? key,
+                              style: const TextStyle(fontSize: 14)),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close,
+                            size: 18, color: Colors.red),
+                        onPressed: () {
+                          setState(() {
+                            backFields.remove(key);
+                            state['backFields'] = List.from(backFields);
+                          });
+                          if (mounted) {
+                            final newSettings = {
+                              'frontFields': List.from(frontFields),
+                              'backFields': List.from(backFields),
+                            };
+                            ref.read(studySettingsProvider.notifier).state =
+                                newSettings;
+                            _saveSettingsToPrefs(newSettings);
+                            _saveAllStudySettings();
+                          }
+                        },
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                      ),
+                    ],
+                  ),
                 );
               }).toList(),
+
+              if (backFields.length < allFields.length)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.grey.shade300),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      hint: const Text('+ Add field to back'),
+                      value: null,
+                      isExpanded: true,
+                      items: allFields
+                          .where((field) => !backFields.contains(field))
+                          .map((field) {
+                        return DropdownMenuItem(
+                          value: field,
+                          child: Text(fieldLabels[field] ?? field),
+                        );
+                      }).toList(),
+                      onChanged: (value) {
+                        if (value != null) {
+                          setState(() {
+                            backFields.add(value);
+                            state['backFields'] = List.from(backFields);
+                          });
+                          if (mounted) {
+                            final newSettings = {
+                              'frontFields': List.from(frontFields),
+                              'backFields': List.from(backFields),
+                            };
+                            ref.read(studySettingsProvider.notifier).state =
+                                newSettings;
+                            _saveSettingsToPrefs(newSettings);
+                          }
+                        }
+                      },
+                    ),
+                  ),
+                ),
+
+              const SizedBox(height: 16),
+
+              if (frontFields.isEmpty || backFields.isEmpty)
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.orange.shade200),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.warning, color: Colors.orange.shade700),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          frontFields.isEmpty
+                              ? '⚠️ Front side has no fields!'
+                              : '⚠️ Back side has no fields!',
+                          style: TextStyle(
+                              fontSize: 12, color: Colors.orange.shade700),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
               const SizedBox(height: 8),
+
               Center(
                 child: TextButton(
                   onPressed: () {
@@ -1390,13 +1522,15 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                       state['frontFields'] = List.from(defaultFront);
                       state['backFields'] = List.from(defaultBack);
                     });
-                    final newSettings = {
-                      'frontFields': defaultFront,
-                      'backFields': defaultBack,
-                    };
-                    ref.read(studySettingsProvider.notifier).state =
-                        newSettings;
-                    _saveSettingsToPrefs(newSettings);
+                    if (mounted) {
+                      final newSettings = {
+                        'frontFields': defaultFront,
+                        'backFields': defaultBack,
+                      };
+                      ref.read(studySettingsProvider.notifier).state =
+                          newSettings;
+                      _saveSettingsToPrefs(newSettings);
+                    }
                   },
                   child: const Text('Reset to Defaults'),
                 ),
@@ -1624,7 +1758,9 @@ class _StudyPageState extends ConsumerState<StudyPage> {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
     final isTtsEnabled = ttsSettings['enabled'] ?? true;
     final currentLanguage = ttsSettings['language'] ?? 'ja';
+    final themeColor = ref.watch(themeColorProvider);
 
+    // Lấy danh sách fields từ settings
     List<String> frontFields = [];
     final frontData = settings['frontFields'];
     if (frontData is List) {
@@ -1633,23 +1769,25 @@ class _StudyPageState extends ConsumerState<StudyPage> {
       frontFields = ['vietnamese', 'english'];
     }
 
+    // Gradient màu theo theme
     final gradientColors = isDarkMode
-        ? const [Color(0xFF1A237E), Color(0xFF0D47A1)]
-        : const [Color(0xFFE3F2FD), Color(0xFFBBDEFB)];
+        ? [Colors.grey[900]!, Colors.grey[850]!]
+        : [themeColor.withOpacity(0.05), themeColor.withOpacity(0.15)];
 
     final textColor = isDarkMode ? Colors.white : Colors.black87;
-    final subtitleColor = isDarkMode ? Colors.white70 : Colors.black54;
-    final badgeColor = isDarkMode ? Colors.blue.shade800 : Colors.blue.shade200;
-    final badgeTextColor = isDarkMode ? Colors.white : Colors.blue;
+    final subtitleColor = isDarkMode ? Colors.grey[400] : Colors.black54;
+    final badgeColor =
+        isDarkMode ? themeColor.withOpacity(0.3) : themeColor.withOpacity(0.15);
+    final badgeTextColor = isDarkMode ? Colors.white : themeColor;
     final hintBgColor = isDarkMode
-        ? Colors.white.withOpacity(0.15)
-        : Colors.white.withOpacity(0.6);
-    final hintTextColor = isDarkMode ? Colors.white70 : Colors.grey;
+        ? Colors.white.withOpacity(0.08)
+        : Colors.white.withOpacity(0.7);
+    final hintTextColor = isDarkMode ? Colors.grey[400] : Colors.grey[600];
 
     if (frontFields.isEmpty) {
       return Card(
         elevation: 4,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         child: Container(
           width: double.infinity,
           padding: const EdgeInsets.all(24),
@@ -1659,7 +1797,10 @@ class _StudyPageState extends ConsumerState<StudyPage> {
               end: Alignment.bottomRight,
               colors: gradientColors,
             ),
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(20),
+            border: isDarkMode
+                ? Border.all(color: Colors.grey[800]!, width: 1)
+                : null,
           ),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -1667,14 +1808,22 @@ class _StudyPageState extends ConsumerState<StudyPage> {
               Icon(Icons.warning, size: 48, color: Colors.orange),
               const SizedBox(height: 16),
               Text(
-                'No fields selected for front side',
-                style: TextStyle(fontSize: 18, color: textColor),
+                '⚠️ No fields selected for front side',
+                style: TextStyle(
+                  fontSize: 18,
+                  color: textColor,
+                  fontWeight: FontWeight.bold,
+                ),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 8),
               Text(
-                'Please customize in settings',
-                style: TextStyle(fontSize: 14, color: subtitleColor),
+                'Please add fields in Settings → Customize',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: subtitleColor,
+                ),
+                textAlign: TextAlign.center,
               ),
             ],
           ),
@@ -1684,17 +1833,20 @@ class _StudyPageState extends ConsumerState<StudyPage> {
 
     return Card(
       elevation: 4,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       child: Container(
         width: double.infinity,
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(32),
         decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
             colors: gradientColors,
           ),
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(20),
+          border: isDarkMode
+              ? Border.all(color: Colors.grey[800]!, width: 1)
+              : null,
         ),
         child: SingleChildScrollView(
           child: Column(
@@ -1721,13 +1873,12 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                   ),
                   Row(
                     children: [
-                      // TTS Audio Button
                       if (isTtsEnabled)
                         IconButton(
                           icon: Icon(
                             _isTtsPlaying ? Icons.stop : Icons.volume_up,
-                            size: 20,
-                            color: _isTtsPlaying ? Colors.red : Colors.blue,
+                            size: 22,
+                            color: _isTtsPlaying ? Colors.red : themeColor,
                           ),
                           onPressed: () {
                             if (_isTtsPlaying) {
@@ -1746,23 +1897,40 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                 ],
               ),
               const SizedBox(height: 24),
+
+              // CHỈ HIỂN THỊ CÁC FIELD ĐÃ CHỌN, KHÔNG CỐ ĐỊNH
               ..._buildFields(card, frontFields, isDarkMode),
+
               const SizedBox(height: 24),
+
+              // Hint
               Container(
                 padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                 decoration: BoxDecoration(
                   color: hintBgColor,
-                  borderRadius: BorderRadius.circular(20),
+                  borderRadius: BorderRadius.circular(30),
+                  border: Border.all(
+                    color: isDarkMode
+                        ? Colors.white.withOpacity(0.1)
+                        : Colors.grey.withOpacity(0.2),
+                  ),
                 ),
-                child: const Row(
+                child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.touch_app, size: 16, color: Colors.grey),
-                    SizedBox(width: 8),
+                    Icon(
+                      Icons.touch_app,
+                      size: 18,
+                      color: hintTextColor,
+                    ),
+                    const SizedBox(width: 8),
                     Text(
                       'Tap to flip',
-                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: hintTextColor,
+                      ),
                     ),
                   ],
                 ),
@@ -1782,7 +1950,9 @@ class _StudyPageState extends ConsumerState<StudyPage> {
     final isTtsEnabled = ref.watch(ttsEnabledProvider);
     final currentLanguage = ref.watch(ttsLanguageProvider);
     final isSrsEnabled = ref.watch(srsEnabledProvider);
+    final themeColor = ref.watch(themeColorProvider);
 
+    // Lấy danh sách fields từ settings
     List<String> backFields = [];
     final backData = settings['backFields'];
     if (backData is List) {
@@ -1804,24 +1974,25 @@ class _StudyPageState extends ConsumerState<StudyPage> {
       ];
     }
 
+    // Gradient màu theo theme
     final gradientColors = isDarkMode
-        ? const [Color(0xFF1B5E20), Color(0xFF2E7D32)]
-        : const [Color(0xFFE8F5E9), Color(0xFFC8E6C9)];
+        ? [Colors.grey[900]!, Colors.grey[850]!]
+        : [themeColor.withOpacity(0.05), themeColor.withOpacity(0.15)];
 
     final textColor = isDarkMode ? Colors.white : Colors.black87;
-    final subtitleColor = isDarkMode ? Colors.white70 : Colors.black54;
+    final subtitleColor = isDarkMode ? Colors.grey[400] : Colors.black54;
     final badgeColor =
-        isDarkMode ? Colors.green.shade800 : Colors.green.shade200;
-    final badgeTextColor = isDarkMode ? Colors.white : Colors.green;
+        isDarkMode ? themeColor.withOpacity(0.3) : themeColor.withOpacity(0.15);
+    final badgeTextColor = isDarkMode ? Colors.white : themeColor;
     final hintBgColor = isDarkMode
-        ? Colors.white.withOpacity(0.15)
-        : Colors.white.withOpacity(0.6);
-    final hintTextColor = isDarkMode ? Colors.white70 : Colors.grey;
+        ? Colors.white.withOpacity(0.08)
+        : Colors.white.withOpacity(0.7);
+    final hintTextColor = isDarkMode ? Colors.grey[400] : Colors.grey[600];
 
     if (backFields.isEmpty) {
       return Card(
         elevation: 4,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         child: Container(
           width: double.infinity,
           padding: const EdgeInsets.all(24),
@@ -1831,7 +2002,10 @@ class _StudyPageState extends ConsumerState<StudyPage> {
               end: Alignment.bottomRight,
               colors: gradientColors,
             ),
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(20),
+            border: isDarkMode
+                ? Border.all(color: Colors.grey[800]!, width: 1)
+                : null,
           ),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -1839,14 +2013,22 @@ class _StudyPageState extends ConsumerState<StudyPage> {
               Icon(Icons.warning, size: 48, color: Colors.orange),
               const SizedBox(height: 16),
               Text(
-                'No fields selected for back side',
-                style: TextStyle(fontSize: 18, color: textColor),
+                '⚠️ No fields selected for back side',
+                style: TextStyle(
+                  fontSize: 18,
+                  color: textColor,
+                  fontWeight: FontWeight.bold,
+                ),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 8),
               Text(
-                'Please customize in settings',
-                style: TextStyle(fontSize: 14, color: subtitleColor),
+                'Please add fields in Settings → Customize',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: subtitleColor,
+                ),
+                textAlign: TextAlign.center,
               ),
             ],
           ),
@@ -1856,17 +2038,20 @@ class _StudyPageState extends ConsumerState<StudyPage> {
 
     return Card(
       elevation: 4,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       child: Container(
         width: double.infinity,
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(32),
         decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
             colors: gradientColors,
           ),
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(20),
+          border: isDarkMode
+              ? Border.all(color: Colors.grey[800]!, width: 1)
+              : null,
         ),
         child: SingleChildScrollView(
           child: Column(
@@ -1893,57 +2078,12 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                   ),
                   Row(
                     children: [
-                      if (isSrsEnabled) ...[
-                        const SizedBox(height: 16),
-                        const Divider(),
-                        const SizedBox(height: 8),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Text(
-                              'Rate your recall:',
-                              style: TextStyle(
-                                  fontSize: 14, fontWeight: FontWeight.w500),
-                            ),
-                            const SizedBox(width: 8),
-                            IconButton(
-                              icon: const Icon(
-                                  Icons.sentiment_very_dissatisfied,
-                                  color: Colors.red),
-                              onPressed: () {
-                                _updateSrsStatus(card.id, 'hard');
-                              },
-                              tooltip: 'Hard',
-                              iconSize: 28,
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.sentiment_neutral,
-                                  color: Colors.orange),
-                              onPressed: () {
-                                _updateSrsStatus(card.id, 'medium');
-                              },
-                              tooltip: 'Medium',
-                              iconSize: 28,
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.sentiment_very_satisfied,
-                                  color: Colors.green),
-                              onPressed: () {
-                                _updateSrsStatus(card.id, 'easy');
-                              },
-                              tooltip: 'Easy',
-                              iconSize: 28,
-                            ),
-                          ],
-                        ),
-                      ],
-                      // TTS Audio Button
                       if (isTtsEnabled)
                         IconButton(
                           icon: Icon(
                             _isTtsPlaying ? Icons.stop : Icons.volume_up,
-                            size: 20,
-                            color: _isTtsPlaying ? Colors.red : Colors.blue,
+                            size: 22,
+                            color: _isTtsPlaying ? Colors.red : themeColor,
                           ),
                           onPressed: () {
                             if (_isTtsPlaying) {
@@ -1961,24 +2101,87 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                   ),
                 ],
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 16),
+
+              // CHỈ HIỂN THỊ CÁC FIELD ĐÃ CHỌN, KHÔNG CỐ ĐỊNH
               ..._buildFields(card, backFields, isDarkMode),
-              const SizedBox(height: 24),
+
+              const SizedBox(height: 16),
+
+              // SRS Rating (nếu bật)
+              if (isSrsEnabled) ...[
+                const Divider(),
+                const SizedBox(height: 8),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Text(
+                      'Rate your recall:',
+                      style:
+                          TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      icon: const Icon(Icons.sentiment_very_dissatisfied,
+                          color: Colors.red),
+                      onPressed: () {
+                        _updateSrsStatus(card.id, 'hard');
+                      },
+                      tooltip: 'Hard',
+                      iconSize: 28,
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.sentiment_neutral,
+                          color: Colors.orange),
+                      onPressed: () {
+                        _updateSrsStatus(card.id, 'medium');
+                      },
+                      tooltip: 'Medium',
+                      iconSize: 28,
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.sentiment_very_satisfied,
+                          color: Colors.green),
+                      onPressed: () {
+                        _updateSrsStatus(card.id, 'easy');
+                      },
+                      tooltip: 'Easy',
+                      iconSize: 28,
+                    ),
+                  ],
+                ),
+              ],
+
+              const SizedBox(height: 16),
+
+              // Hint
               Container(
                 padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                 decoration: BoxDecoration(
                   color: hintBgColor,
-                  borderRadius: BorderRadius.circular(20),
+                  borderRadius: BorderRadius.circular(30),
+                  border: Border.all(
+                    color: isDarkMode
+                        ? Colors.white.withOpacity(0.1)
+                        : Colors.grey.withOpacity(0.2),
+                  ),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.touch_app, size: 16, color: hintTextColor),
+                    Icon(
+                      Icons.touch_app,
+                      size: 18,
+                      color: hintTextColor,
+                    ),
                     const SizedBox(width: 8),
                     Text(
                       'Tap to flip back',
-                      style: TextStyle(fontSize: 12, color: hintTextColor),
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: hintTextColor,
+                      ),
                     ),
                   ],
                 ),
@@ -1998,7 +2201,7 @@ class _StudyPageState extends ConsumerState<StudyPage> {
     final textAlignment = ref.watch(textAlignmentProvider);
 
     final textColor = isDarkMode ? Colors.white : Colors.black87;
-    final subtitleColor = isDarkMode ? Colors.white70 : Colors.black54;
+    final subtitleColor = isDarkMode ? Colors.grey[400] : Colors.black54;
     final exampleBgColor =
         isDarkMode ? Colors.grey.shade800 : Colors.grey.shade100;
     final noteBgColor = isDarkMode
@@ -2007,6 +2210,7 @@ class _StudyPageState extends ConsumerState<StudyPage> {
     final noteBorderColor =
         isDarkMode ? Colors.amber.shade700 : Colors.amber.shade200;
 
+    // Xây dựng map các field
     final Map<String, Widget Function()> fieldBuilders = {
       'vietnamese': () => Text(
             card.vietnamese,
@@ -2149,14 +2353,13 @@ class _StudyPageState extends ConsumerState<StudyPage> {
     };
 
     List<Widget> result = [];
+    // CHỈ HIỂN THỊ CÁC FIELD CÓ TRONG DANH SÁCH fields
     for (var field in fields) {
       if (fieldBuilders.containsKey(field)) {
         final widget = fieldBuilders[field]!();
         if (widget is! SizedBox) {
           result.add(widget);
-          if (field != fields.last) {
-            result.add(const SizedBox(height: 8));
-          }
+          result.add(const SizedBox(height: 8));
         }
       }
     }
@@ -2839,7 +3042,10 @@ class _StudyPageState extends ConsumerState<StudyPage> {
           'study_front_fields', List<String>.from(settings['frontFields']));
       await prefs.setStringList(
           'study_back_fields', List<String>.from(settings['backFields']));
-      print('✅ Study settings saved');
+      print('✅ Study settings saved to prefs');
+
+      // ⭐ GỌI THÊM _saveAllStudySettings() ĐỂ LƯU TẤT CẢ
+      await _saveAllStudySettings();
     } catch (e) {
       print('❌ Error saving study settings: $e');
     }
@@ -2865,6 +3071,8 @@ class _StudyPageState extends ConsumerState<StudyPage> {
   }
 
   Future<void> _saveFontSizesToPrefs(Map<String, double> sizes) async {
+    if (!mounted) return;
+
     try {
       final prefs = await SharedPreferences.getInstance();
       final Map<String, String> stringSizes = {};
@@ -2905,6 +3113,8 @@ class _StudyPageState extends ConsumerState<StudyPage> {
   }
 
   Future<void> _saveTextAlignmentToPrefs(TextAlign alignment) async {
+    if (!mounted) return;
+
     try {
       final prefs = await SharedPreferences.getInstance();
       final int value = alignment.index;
@@ -2932,18 +3142,26 @@ class _StudyPageState extends ConsumerState<StudyPage> {
   // ==================== AUTO-FLIP FUNCTIONS ====================
 
   void _startAutoFlip() {
-    _stopAutoFlip();
+    _autoFlipTimer?.cancel();
+    _autoFlipTimer = null;
+
+    if (!mounted || _isDisposed) return;
+
+    final enabled = ref.read(autoFlipEnabledProvider);
+    if (!enabled) return;
+
+    final frontDuration = ref.read(autoFlipFrontDurationProvider);
+    final backDuration = ref.read(autoFlipBackDurationProvider);
+
+    _isAutoFlipping = true;
+    ref.read(isAutoFlippingProvider.notifier).state = true;
 
     if (!mounted) return;
 
-    final enabled = ref.read(autoFlipEnabledProvider);
     if (!enabled) {
       print('⚠️ Auto-flip is disabled');
       return;
     }
-
-    final frontDuration = ref.read(autoFlipFrontDurationProvider);
-    final backDuration = ref.read(autoFlipBackDurationProvider);
 
     print(
         '▶️ Starting auto-flip: front=${frontDuration}s, back=${backDuration}s');
@@ -3079,13 +3297,21 @@ class _StudyPageState extends ConsumerState<StudyPage> {
   }
 
   void _stopAutoFlip() {
+    // Hủy timer
     _autoFlipTimer?.cancel();
     _autoFlipTimer = null;
     _isAutoFlipping = false;
-    ref.read(isAutoFlippingProvider.notifier).state = false;
+
+    // CHỈ CẬP NHẬT STATE KHI CÒN MOUNTED
+    if (mounted && !_isDisposed) {
+      ref.read(isAutoFlippingProvider.notifier).state = false;
+    }
   }
 
   void _toggleAutoFlip(bool value) {
+    // Kiểm tra mounted
+    if (!mounted || _isDisposed) return;
+
     ref.read(autoFlipEnabledProvider.notifier).state = value;
     if (value) {
       _startAutoFlip();
@@ -3409,6 +3635,7 @@ class _StudyPageState extends ConsumerState<StudyPage> {
   Future<void> _speakCard(Flashcard card, String language) async {
     // Chọn text để phát dựa trên ngôn ngữ
     String textToSpeak = '';
+    if (!mounted) return;
 
     switch (language) {
       case 'ja':
@@ -3888,10 +4115,10 @@ class _StudyPageState extends ConsumerState<StudyPage> {
   }
 
   void _toggleSrs(bool value) {
-    final settings = ref.read(srsSettingsProvider);
-    settings['enabled'] = value;
-    ref.read(srsSettingsProvider.notifier).state = settings;
+    // Kiểm tra mounted
+    if (!mounted) return;
 
+    ref.read(srsEnabledProvider.notifier).state = value;
     if (value) {
       _loadReviewQueue();
       ScaffoldMessenger.of(context).showSnackBar(
@@ -3913,23 +4140,21 @@ class _StudyPageState extends ConsumerState<StudyPage> {
   // ==================== SAVE / LOAD STUDY SETTINGS ====================
 
   Future<void> _saveAllStudySettings() async {
+    // Không kiểm tra mounted ở đây vì hàm này có thể được gọi khi đóng dialog
     try {
       final prefs = await SharedPreferences.getInstance();
 
-      // Auto-flip
+      // Lưu tất cả settings
       await prefs.setBool(
           'study_autoFlipEnabled', ref.read(autoFlipEnabledProvider));
       await prefs.setDouble('study_autoFlipFrontDuration',
           ref.read(autoFlipFrontDurationProvider));
       await prefs.setDouble(
           'study_autoFlipBackDuration', ref.read(autoFlipBackDurationProvider));
-
-      // TTS
       await prefs.setBool('study_ttsEnabled', ref.read(ttsEnabledProvider));
       await prefs.setBool('study_ttsAutoPlay', ref.read(ttsAutoPlayProvider));
       await prefs.setString('study_ttsLanguage', ref.read(ttsLanguageProvider));
 
-      // Font Size
       final fontSizes = ref.read(fontSizeProvider);
       final fontSizesJson = <String, String>{};
       fontSizes.forEach((key, value) {
@@ -3937,24 +4162,44 @@ class _StudyPageState extends ConsumerState<StudyPage> {
       });
       await prefs.setString('study_fontSizes', fontSizesJson.toString());
 
-      // Text Alignment
       await prefs.setInt(
           'study_textAlignment', ref.read(textAlignmentProvider).index);
 
-      // Study Settings (front/back fields)
+      // LƯU FRONT FIELDS VÀ BACK FIELDS
       final studySettings = ref.read(studySettingsProvider);
-      await prefs.setStringList('study_frontFields',
-          List<String>.from(studySettings['frontFields'] ?? []));
-      await prefs.setStringList('study_backFields',
-          List<String>.from(studySettings['backFields'] ?? []));
+      final frontFields =
+          studySettings['frontFields'] as List? ?? ['vietnamese', 'english'];
+      final backFields = studySettings['backFields'] as List? ??
+          [
+            'vietnamese',
+            'english',
+            'jpKanji',
+            'jpReading',
+            'jpDetailType',
+            'jpLevel',
+            'enLevel',
+            'cnCharacter',
+            'cnPinyin',
+            'cnLevel',
+            'exampleSentence',
+            'contextNote'
+          ];
 
-      print('💾 Saved all study settings');
+      await prefs.setStringList(
+          'study_front_fields', List<String>.from(frontFields));
+      await prefs.setStringList(
+          'study_back_fields', List<String>.from(backFields));
+
+      print(
+          '💾 Saved all study settings: front=${frontFields.length}, back=${backFields.length}');
     } catch (e) {
       print('❌ Error saving study settings: $e');
     }
   }
 
   Future<void> _loadAllStudySettings() async {
+    if (_isDisposed || !mounted) return;
+
     try {
       final prefs = await SharedPreferences.getInstance();
 
@@ -4025,9 +4270,9 @@ class _StudyPageState extends ConsumerState<StudyPage> {
             TextAlign.values[alignmentIndex];
       }
 
-      // Study Settings (front/back fields)
-      final frontFields = prefs.getStringList('study_frontFields');
-      final backFields = prefs.getStringList('study_backFields');
+      // ⭐ QUAN TRỌNG: LOAD FRONT FIELDS VÀ BACK FIELDS
+      final frontFields = prefs.getStringList('study_front_fields');
+      final backFields = prefs.getStringList('study_back_fields');
 
       if (frontFields != null && backFields != null) {
         final studySettings = {
@@ -4035,6 +4280,28 @@ class _StudyPageState extends ConsumerState<StudyPage> {
           'backFields': backFields,
         };
         ref.read(studySettingsProvider.notifier).state = studySettings;
+        print(
+            '📂 Loaded fields: front=${frontFields.length}, back=${backFields.length}');
+      } else {
+        // Nếu chưa có, set default
+        final defaultSettings = {
+          'frontFields': ['vietnamese', 'english'],
+          'backFields': [
+            'vietnamese',
+            'english',
+            'jpKanji',
+            'jpReading',
+            'jpDetailType',
+            'jpLevel',
+            'enLevel',
+            'cnCharacter',
+            'cnPinyin',
+            'cnLevel',
+            'exampleSentence',
+            'contextNote'
+          ],
+        };
+        ref.read(studySettingsProvider.notifier).state = defaultSettings;
       }
 
       print('📂 Loaded all study settings');

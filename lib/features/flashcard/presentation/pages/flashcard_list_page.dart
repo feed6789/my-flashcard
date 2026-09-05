@@ -2,6 +2,7 @@
 
 import 'package:flashcard_app/core/providers/theme_provider.dart';
 import 'package:flashcard_app/features/flashcard/data/datasources/supabase_source.dart';
+import 'package:flashcard_app/features/flashcard/presentation/widgets/color_picker_dialog.dart';
 import 'package:flashcard_app/features/flashcard/presentation/widgets/login_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -433,6 +434,9 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
   }
 
   Future<void> _loadFlashcardsWithFilter({bool keepPage = false}) async {
+    // KIỂM TRA MOUNTED
+    if (!mounted) return;
+
     final filters = ref.read(filterProvider);
     final notifier = ref.read(localFlashcardsProvider.notifier);
 
@@ -476,6 +480,9 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
         searchQuery: searchQuery,
       );
 
+      // KIỂM TRA MOUNTED TRƯỚC KHI SETSTATE
+      if (!mounted) return;
+
       setState(() {
         _totalItems = total;
         notifier.state = cards;
@@ -483,7 +490,7 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
         _isSearching = false;
       });
 
-      // LƯU TẤT CẢ TRẠNG THÁI
+      // Lưu trạng thái
       await _saveCurrentPage();
       await _saveFilterState();
       await _saveSettingsState();
@@ -492,10 +499,12 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
           '📊 Loaded ${cards.length} cards (total: $total, page: ${_currentPage + 1})');
     } catch (e) {
       print('❌ Error loading with filter: $e');
-      setState(() {
-        _isLoadingMore = false;
-        _isSearching = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoadingMore = false;
+          _isSearching = false;
+        });
+      }
     }
   }
 
@@ -1086,6 +1095,20 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
             },
             tooltip: 'Toggle theme',
           ),
+          // Nút đổi màu
+          IconButton(
+            icon: const Icon(Icons.color_lens),
+            onPressed: () {
+              showDialog(
+                context: context,
+                builder: (context) => const ColorPickerDialog(),
+              ).then((_) {
+                // Refresh để áp dụng màu mới
+                setState(() {});
+              });
+            },
+            tooltip: 'Change theme color',
+          ),
           // NHÓM 1: Filter, Settings, Search
           PopupMenuButton<String>(
             icon: const Icon(Icons.tune),
@@ -1271,7 +1294,11 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                     ),
                   ),
                 ).then((_) {
-                  _loadFlashcardsWithFilter(keepPage: true);
+                  // KIỂM TRA MOUNTED TRƯỚC KHI GỌI REF
+                  if (mounted) {
+                    // Refresh dữ liệu nhưng giữ nguyên trang
+                    _loadFlashcardsWithFilter(keepPage: true);
+                  }
                 });
               },
               tooltip: 'Study flashcards',
