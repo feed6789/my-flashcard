@@ -2,6 +2,8 @@
 
 import 'package:flashcard_app/core/providers/theme_provider.dart';
 import 'package:flashcard_app/features/flashcard/data/datasources/supabase_source.dart';
+import 'package:flashcard_app/features/flashcard/data/datasources/user_progress_source.dart';
+import 'package:flashcard_app/features/flashcard/data/models/user_progress_model.dart';
 import 'package:flashcard_app/features/flashcard/presentation/widgets/color_picker_dialog.dart';
 import 'package:flashcard_app/features/flashcard/presentation/widgets/login_dialog.dart';
 import 'package:flutter/material.dart';
@@ -454,7 +456,13 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
       }
 
       String sortBy = filters['sortBy'] ?? 'id';
-      bool ascending = filters['sortAscending'] ?? true;
+      bool ascending =
+          filters['sortAscending'] ?? true; // Mặc định true = tăng dần
+
+// Đảm bảo khi filter không có sortAscending thì mặc định là true
+      if (!filters.containsKey('sortAscending')) {
+        ascending = true;
+      }
 
       final offset = _currentPage * _pageSize;
 
@@ -1648,9 +1656,17 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
     final isDownloading = ref.read(isLoadingFromSupabaseProvider.notifier);
     final progress = ref.read(downloadProgressProvider.notifier);
 
+    // Kiểm tra đăng nhập
+    final authState = ref.read(authNotifierProvider);
+    if (!authState.isAuthenticated) {
+      _showLoginDialog();
+      return;
+    }
+
     final localDb = LocalDatabase();
     final existingCards = await localDb.getAllFlashcards();
 
+    // Hỏi người dùng có muốn ghi đè không
     if (existingCards.isNotEmpty) {
       final confirm = await showDialog<bool>(
         context: context,
@@ -1667,19 +1683,15 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                 const Text('Do you want to:'),
                 const SizedBox(height: 8),
                 ListTile(
-                  leading: const Icon(Icons.add_circle, color: Colors.green),
-                  title: const Text('Append (Add more)'),
-                  onTap: () => Navigator.pop(context, true),
-                ),
-                ListTile(
                   leading: const Icon(Icons.refresh, color: Colors.orange),
                   title: const Text('Replace (Delete all and download new)'),
-                  onTap: () => Navigator.pop(context, false),
+                  subtitle: const Text('All local data will be replaced'),
+                  onTap: () => Navigator.pop(context, true),
                 ),
                 ListTile(
                   leading: const Icon(Icons.cancel, color: Colors.red),
                   title: const Text('Cancel'),
-                  onTap: () => Navigator.pop(context, null),
+                  onTap: () => Navigator.pop(context, false),
                 ),
               ],
             ),
@@ -1687,13 +1699,10 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
         },
       );
 
-      if (confirm == null) return;
-      if (!confirm) {
-        await localDb.deleteAllFlashcards();
-        ref.read(localFlashcardsProvider.notifier).state = [];
-      }
+      if (confirm != true) return;
     }
 
+    // Bắt đầu tải
     isDownloading.state = true;
     progress.state = 0.0;
 
@@ -1706,9 +1715,7 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                 width: 20,
                 height: 20,
                 child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: Colors.white,
-                ),
+                    strokeWidth: 2, color: Colors.white),
               ),
               SizedBox(width: 12),
               Text('Downloading from server...'),
@@ -1718,12 +1725,12 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
         ),
       );
 
-      final repository = FlashcardRepository();
-      final supabaseCards = await repository.getSupabaseFlashcards();
+      final supabaseSource = SupabaseSource();
+      final serverCards = await supabaseSource.getAllFlashcards();
 
       progress.state = 0.5;
 
-      if (supabaseCards.isEmpty) {
+      if (serverCards.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('No data available on server'),
@@ -1734,10 +1741,9 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
         return;
       }
 
-      print('📥 Downloaded ${supabaseCards.length} cards from Supabase');
-
-      // Thêm vào local database
-      final added = await localDb.insertMultipleFlashcards(supabaseCards);
+      // Xóa local và thêm mới
+      await localDb.deleteAllFlashcards();
+      await localDb.insertMultipleFlashcards(serverCards);
 
       progress.state = 1.0;
 
@@ -1748,11 +1754,18 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('✅ Downloaded $added flashcards successfully!'),
+          content: Text(
+              '✅ Downloaded ${serverCards.length} flashcards successfully!'),
           backgroundColor: Colors.green,
           duration: const Duration(seconds: 3),
         ),
       );
+
+      setState(() {
+        _currentPage = 0;
+        _totalItems = 0;
+      });
+      _loadFlashcardsWithFilter();
     } catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -2772,26 +2785,27 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
 
   // Hàm mở login dialog
   void _showLoginDialog() {
+    final TextEditingController emailController = TextEditingController();
+    final TextEditingController passwordController = TextEditingController();
+    final GlobalKey<FormState> formKey = GlobalKey<FormState>();
+
+    bool isLogin = true;
+    bool obscurePassword = true;
+    bool isLoading = false;
+    String? errorMessage;
+
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) {
+      builder: (BuildContext dialogContext) {
         return StatefulBuilder(
           builder: (context, setState) {
-            final emailController = TextEditingController();
-            final passwordController = TextEditingController();
-            final formKey = GlobalKey<FormState>();
-            bool isLogin = true;
-            bool obscurePassword = true;
-            bool isLoading = false;
-            String? errorMessage;
-
             return AlertDialog(
               title: Row(
                 children: [
                   Icon(Icons.cloud_sync, color: Theme.of(context).primaryColor),
                   const SizedBox(width: 8),
-                  Text(isLogin ? 'Sign In to Sync' : 'Create Account'),
+                  Text(isLogin ? 'Sign In' : 'Create Account'),
                 ],
               ),
               content: SizedBox(
@@ -2803,14 +2817,12 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                     children: [
                       Text(
                         isLogin
-                            ? 'Sign in to sync your flashcards and progress'
-                            : 'Create an account to sync your flashcards and progress',
+                            ? 'Sign in to sync your study progress'
+                            : 'Create an account to sync your progress',
                         style:
                             const TextStyle(fontSize: 14, color: Colors.grey),
                       ),
                       const SizedBox(height: 16),
-
-                      // Email
                       TextFormField(
                         controller: emailController,
                         decoration: const InputDecoration(
@@ -2830,8 +2842,6 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                         },
                       ),
                       const SizedBox(height: 12),
-
-                      // Password
                       TextFormField(
                         controller: passwordController,
                         obscureText: obscurePassword,
@@ -2863,8 +2873,6 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                         },
                       ),
                       const SizedBox(height: 8),
-
-                      // Error message
                       if (errorMessage != null)
                         Container(
                           padding: const EdgeInsets.all(8),
@@ -2885,7 +2893,11 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.pop(context),
+                  onPressed: () {
+                    if (context.mounted) {
+                      Navigator.pop(context);
+                    }
+                  },
                   child: const Text('Cancel'),
                 ),
                 TextButton(
@@ -2902,6 +2914,8 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                       ? null
                       : () async {
                           if (formKey.currentState!.validate()) {
+                            FocusScope.of(context).unfocus();
+
                             setState(() {
                               isLoading = true;
                               errorMessage = null;
@@ -2909,18 +2923,23 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
 
                             final authNotifier =
                                 ref.read(authNotifierProvider.notifier);
-                            bool success;
+                            bool success = false;
 
-                            if (isLogin) {
-                              success = await authNotifier.signIn(
-                                emailController.text,
-                                passwordController.text,
-                              );
-                            } else {
-                              success = await authNotifier.signUp(
-                                emailController.text,
-                                passwordController.text,
-                              );
+                            try {
+                              if (isLogin) {
+                                success = await authNotifier.signIn(
+                                  emailController.text.trim(),
+                                  passwordController.text,
+                                );
+                              } else {
+                                success = await authNotifier.signUp(
+                                  emailController.text.trim(),
+                                  passwordController.text,
+                                );
+                              }
+                            } catch (e) {
+                              print('❌ Auth error: $e');
+                              success = false;
                             }
 
                             if (!mounted) return;
@@ -2932,46 +2951,12 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                               // Đóng dialog
                               Navigator.pop(context);
 
-                              // Hiển thị loading
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(
-                                  content: Row(
-                                    children: [
-                                      SizedBox(
-                                        width: 20,
-                                        height: 20,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          color: Colors.white,
-                                        ),
-                                      ),
-                                      SizedBox(width: 12),
-                                      Text('Syncing data from server...'),
-                                    ],
-                                  ),
-                                  duration: Duration(seconds: 30),
-                                ),
-                              );
-
-                              // Đồng bộ toàn bộ dữ liệu
-                              await _syncAllData();
-
-                              // Refresh danh sách
-                              await ref
-                                  .read(localFlashcardsProvider.notifier)
-                                  .loadLocalFlashcards();
-                              setState(() {
-                                _currentPage = 0;
-                                _totalItems = 0;
-                              });
-                              _loadFlashcardsWithFilter();
-
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content:
-                                      Text('✅ Sync completed successfully!'),
+                                  content: Text(
+                                      '✅ Login successful! Use "Download" to get data.'),
                                   backgroundColor: Colors.green,
-                                  duration: Duration(seconds: 2),
+                                  duration: Duration(seconds: 3),
                                 ),
                               );
                             } else {
@@ -2983,13 +2968,16 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                             }
                           }
                         },
+                  style: ElevatedButton.styleFrom(
+                    minimumSize: const Size(100, 40),
+                  ),
                   child: isLoading
                       ? const SizedBox(
                           width: 20,
                           height: 20,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
-                      : Text(isLogin ? 'Sign In & Sync' : 'Create & Sync'),
+                      : Text(isLogin ? 'Sign In' : 'Sign Up'),
                 ),
               ],
             );
@@ -2999,72 +2987,133 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
     );
   }
 
-  Future<void> _syncAllData() async {
-    try {
-      print('🔄 Starting full sync...');
+  void _showProgressDialog(BuildContext context) {
+    if (!context.mounted) return;
 
-      final supabaseSource = SupabaseSource();
-      final localDb = LocalDatabase();
-
-      // 1. Tải toàn bộ flashcards từ Supabase
-      final serverCards = await supabaseSource.getAllFlashcards();
-      print('📥 Downloaded ${serverCards.length} cards from server');
-
-      // 2. Lấy local cards
-      final localCards = await localDb.getAllFlashcards();
-      print('📚 Local cards: ${localCards.length}');
-
-      // 3. Merge dữ liệu: ưu tiên server (vì có study status đã đồng bộ)
-      // Tạo map để dễ tìm kiếm
-      final serverCardMap = {for (var card in serverCards) card.id: card};
-      final localCardMap = {for (var card in localCards) card.id: card};
-
-      int updatedCount = 0;
-      int addedCount = 0;
-
-      // Cập nhật local từ server (ưu tiên server)
-      for (var serverCard in serverCards) {
-        if (localCardMap.containsKey(serverCard.id)) {
-          // Card đã có local, cập nhật study status
-          final localCard = localCardMap[serverCard.id]!;
-          if (localCard.studyStatus != serverCard.studyStatus) {
-            final updatedCard =
-                localCard.copyWith(studyStatus: serverCard.studyStatus);
-            await localDb.updateFlashcard(updatedCard);
-            updatedCount++;
-          }
-        } else {
-          // Card chưa có local, thêm mới
-          await localDb.insertFlashcard(serverCard);
-          addedCount++;
-        }
-      }
-
-      // 4. Upload local cards chưa có trên server (nếu có)
-      int uploadedCount = 0;
-      for (var localCard in localCards) {
-        if (!serverCardMap.containsKey(localCard.id) &&
-            localCard.studyStatus != null) {
-          // Upload study status lên server
-          await supabaseSource.syncStudyStatus(
-              localCard.id, localCard.studyStatus!);
-          uploadedCount++;
-        }
-      }
-
-      print(
-          '✅ Sync completed: updated=$updatedCount, added=$addedCount, uploaded=$uploadedCount');
-    } catch (e) {
-      print('❌ Sync error: $e');
-      rethrow;
-    }
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const AlertDialog(
+        title: Text('Syncing Data'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 16),
+            Text('Loading study progress...'),
+          ],
+        ),
+      ),
+    );
   }
 
+  // Future<void> _syncAllData() async {
+  //   // Kiểm tra mounted
+  //   if (!mounted) return;
+
+  //   try {
+  //     print('🔄 Starting sync...');
+
+  //     final supabaseSource = SupabaseSource();
+  //     final localDb = LocalDatabase();
+
+  //     // 1. Tải study status từ Supabase
+  //     final serverStatusMap = await supabaseSource.loadStudyStatus();
+  //     print('📥 Downloaded ${serverStatusMap.length} statuses from server');
+
+  //     if (serverStatusMap.isEmpty) {
+  //       if (mounted) {
+  //         ScaffoldMessenger.of(context).showSnackBar(
+  //           const SnackBar(
+  //             content: Text('ℹ️ No study statuses on server'),
+  //             backgroundColor: Colors.blue,
+  //             duration: Duration(seconds: 2),
+  //           ),
+  //         );
+  //       }
+  //       return;
+  //     }
+
+  //     // 2. Lấy local cards
+  //     final localCards = await localDb.getAllFlashcards();
+  //     print('📚 Local cards: ${localCards.length}');
+
+  //     // 3. Cập nhật study status từ server vào local
+  //     int updatedCount = 0;
+  //     for (var localCard in localCards) {
+  //       if (serverStatusMap.containsKey(localCard.id)) {
+  //         final serverStatus = serverStatusMap[localCard.id];
+  //         if (serverStatus != null && serverStatus != localCard.studyStatus) {
+  //           final updatedCard = localCard.copyWith(studyStatus: serverStatus);
+  //           await localDb.updateFlashcard(updatedCard);
+  //           updatedCount++;
+  //         }
+  //       }
+  //     }
+
+  //     print('✅ Updated $updatedCount cards from server');
+
+  //     // 4. Upload local status chưa có trên server
+  //     int uploadedCount = 0;
+  //     final updates = <String, String>{};
+  //     for (var localCard in localCards) {
+  //       if (!serverStatusMap.containsKey(localCard.id) &&
+  //           localCard.studyStatus != null &&
+  //           localCard.studyStatus != 'new') {
+  //         updates[localCard.id] = localCard.studyStatus!;
+  //       }
+  //     }
+
+  //     if (updates.isNotEmpty) {
+  //       await supabaseSource.syncMultipleStudyStatus(updates);
+  //       uploadedCount = updates.length;
+  //       print('📤 Uploaded $uploadedCount statuses to server');
+  //     }
+
+  //     // 5. Refresh local list - KIỂM TRA MOUNTED
+  //     if (mounted) {
+  //       await ref.read(localFlashcardsProvider.notifier).loadLocalFlashcards();
+
+  //       // Reset về trang 1
+  //       setState(() {
+  //         _currentPage = 0;
+  //         _totalItems = 0;
+  //       });
+  //       _loadFlashcardsWithFilter();
+
+  //       ScaffoldMessenger.of(context).showSnackBar(
+  //         SnackBar(
+  //           content: Text(
+  //               '✅ Synced: $updatedCount updated, $uploadedCount uploaded'),
+  //           backgroundColor: Colors.green,
+  //           duration: const Duration(seconds: 3),
+  //         ),
+  //       );
+  //     }
+  //   } catch (e) {
+  //     print('❌ Sync error: $e');
+  //     if (mounted) {
+  //       ScaffoldMessenger.of(context).showSnackBar(
+  //         SnackBar(
+  //           content: Text(
+  //               '❌ Sync failed: ${e.toString().replaceFirst('Exception: ', '')}'),
+  //           backgroundColor: Colors.red,
+  //           duration: const Duration(seconds: 3),
+  //         ),
+  //       );
+  //     }
+  //   }
+  // }
+  Future<void> _syncAllData() async {
+    // Chỉ gọi sync study status
+    await _syncStudyStatus();
+  }
+
+  final userProgressProvider = StateProvider<List<UserProgress>>((ref) => []);
   // Hàm sync study status
   Future<void> _syncStudyStatus() async {
     final authState = ref.read(authNotifierProvider);
 
-    // Kiểm tra đăng nhập
     if (!authState.isAuthenticated) {
       _showLoginDialog();
       return;
@@ -3076,39 +3125,100 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
 
     try {
       final localDb = LocalDatabase();
-      final allCards = await localDb.getAllFlashcards();
+      final progressSource = UserProgressSource();
 
-      // Lấy các card có study status
-      final updates = <String, String>{};
-      for (var card in allCards) {
-        if (card.studyStatus != null) {
-          updates[card.id] = card.studyStatus!;
+      // ========== BƯỚC 1: LẤY PROGRESS LOCAL ==========
+      final localProgress = await localDb.getAllUserProgress();
+      print('📚 Local progress: ${localProgress.length} cards');
+
+      // Debug: In ra local progress
+      for (var p in localProgress) {
+        print('📝 Local: ${p.flashcardId} -> ${p.studyStatus}');
+      }
+
+      // ========== BƯỚC 2: UPLOAD LÊN SERVER ==========
+      if (localProgress.isNotEmpty) {
+        print('📤 Uploading ${localProgress.length} progress to server...');
+
+        int uploadedCount = 0;
+        for (var progress in localProgress) {
+          try {
+            final result = await progressSource.upsertProgress(progress);
+            print('✅ Uploaded: ${result.flashcardId} -> ${result.studyStatus}');
+            uploadedCount++;
+          } catch (e) {
+            print('❌ Failed to upload ${progress.flashcardId}: $e');
+          }
+        }
+
+        print('✅ Uploaded $uploadedCount/${localProgress.length} progress');
+      }
+
+      // ========== BƯỚC 3: DOWNLOAD TỪ SERVER ==========
+      print('📥 Downloading progress from server...');
+      final serverProgress = await progressSource.getUserProgress();
+      print('📥 Downloaded ${serverProgress.length} progress from server');
+
+      // Debug: In ra server progress
+      for (var p in serverProgress) {
+        print('📝 Server: ${p.flashcardId} -> ${p.studyStatus}');
+      }
+
+      // ========== BƯỚC 4: MERGE VÀO LOCAL ==========
+      int insertedCount = 0;
+      int updatedCount = 0;
+
+      for (var serverP in serverProgress) {
+        final existing = await localDb
+            .getUserProgressByFlashcardId(serverP.flashcardId.toString());
+
+        if (existing == null) {
+          // Chưa có, thêm mới
+          await localDb.insertUserProgress(serverP);
+          insertedCount++;
+          print(
+              '📥 Inserted: ${serverP.flashcardId} -> ${serverP.studyStatus}');
+        } else {
+          // Đã có, cập nhật nếu server mới hơn
+          final shouldUpdate = serverP.updatedAt != null &&
+              (existing.updatedAt == null ||
+                  serverP.updatedAt!.isAfter(existing.updatedAt!));
+
+          if (shouldUpdate) {
+            await localDb.updateUserProgress(serverP);
+            updatedCount++;
+            print(
+                '🔄 Updated: ${serverP.flashcardId} -> ${serverP.studyStatus}');
+          }
         }
       }
 
-      if (updates.isNotEmpty) {
-        final supabaseSource = SupabaseSource();
-        await supabaseSource.syncMultipleStudyStatus(updates);
+      print('✅ Inserted: $insertedCount, Updated: $updatedCount');
 
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('✅ Synced ${updates.length} study statuses'),
-              backgroundColor: Colors.green,
-              duration: const Duration(seconds: 2),
-            ),
-          );
-        }
-      } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('ℹ️ No study statuses to sync'),
-              backgroundColor: Colors.blue,
-              duration: const Duration(seconds: 2),
-            ),
-          );
-        }
+      // ========== BƯỚC 5: REFRESH UI ==========
+      if (mounted) {
+        // Cập nhật provider
+        final allProgress = await localDb.getAllUserProgress();
+        ref.read(userProgressProvider.notifier).state = allProgress;
+
+        // Refresh flashcards với progress mới
+        await ref.read(localFlashcardsProvider.notifier).loadLocalFlashcards();
+
+        // Reset trang
+        setState(() {
+          _currentPage = 0;
+          _totalItems = 0;
+        });
+        _loadFlashcardsWithFilter();
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content:
+                Text('✅ Synced: $insertedCount new, $updatedCount updated'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 3),
+          ),
+        );
       }
     } catch (e) {
       print('❌ Error syncing: $e');
@@ -3133,51 +3243,68 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
   Future<void> _loadStudyStatusFromServer() async {
     final authState = ref.read(authNotifierProvider);
 
-    if (!authState.isAuthenticated) {
-      return;
-    }
+    if (!authState.isAuthenticated) return;
 
     try {
       print('📥 Loading study statuses from server...');
       final supabaseSource = SupabaseSource();
+
       final statusMap = await supabaseSource.loadStudyStatus();
 
-      if (statusMap.isEmpty) {
+      if (statusMap == null || statusMap.isEmpty) {
         print('ℹ️ No study statuses on server');
         return;
       }
 
-      // Cập nhật local database
       final localDb = LocalDatabase();
       final allCards = await localDb.getAllFlashcards();
 
+      if (allCards == null || allCards.isEmpty) {
+        print('⚠️ No local cards found');
+        return;
+      }
+
       int updatedCount = 0;
+      final batchSize = 100;
+
+      final cardsToUpdate = <Flashcard>[];
       for (var card in allCards) {
+        if (card.id == null || card.id.isEmpty) continue;
+
         if (statusMap.containsKey(card.id)) {
           final serverStatus = statusMap[card.id];
           if (serverStatus != null && serverStatus != card.studyStatus) {
             final updatedCard = card.copyWith(studyStatus: serverStatus);
-            await localDb.updateFlashcard(updatedCard);
-            updatedCount++;
+            cardsToUpdate.add(updatedCard);
           }
         }
       }
 
-      if (updatedCount > 0) {
-        // Refresh danh sách
-        await ref.read(localFlashcardsProvider.notifier).loadLocalFlashcards();
-        print('✅ Updated $updatedCount cards from server');
-
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content:
-                  Text('✅ Loaded $updatedCount study statuses from server'),
-              backgroundColor: Colors.green,
-              duration: const Duration(seconds: 2),
-            ),
-          );
+      for (var i = 0; i < cardsToUpdate.length; i += batchSize) {
+        if (!mounted) {
+          print('⚠️ Widget disposed, stopping update');
+          return;
         }
+
+        final end = (i + batchSize > cardsToUpdate.length)
+            ? cardsToUpdate.length
+            : i + batchSize;
+
+        final batch = cardsToUpdate.sublist(i, end);
+        for (var card in batch) {
+          if (card != null) {
+            await localDb.updateFlashcard(card);
+            updatedCount++;
+          }
+        }
+
+        print(
+            '📊 Update progress: ${i + batch.length}/${cardsToUpdate.length}');
+      }
+
+      if (updatedCount > 0 && mounted) {
+        await ref.read(localFlashcardsProvider.notifier).loadLocalFlashcards();
+        print('✅ Loaded $updatedCount study statuses from server');
       }
     } catch (e) {
       print('❌ Error loading study statuses: $e');

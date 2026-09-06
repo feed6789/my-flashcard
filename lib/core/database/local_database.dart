@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flashcard_app/features/flashcard/data/models/user_progress_model.dart';
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -109,48 +110,6 @@ class LocalDatabase {
         }
       },
     );
-  }
-
-  Future<void> _onCreate(Database db, int version) async {
-    print('🔄 Creating database tables...');
-    await db.execute('''
-      CREATE TABLE flashcards_local (
-        id TEXT PRIMARY KEY,
-        vietnamese TEXT NOT NULL,
-        jp_kanji TEXT,
-        jp_reading TEXT,
-        jp_type TEXT,
-        jp_detail_type TEXT,
-        jp_level TEXT,
-        english TEXT,
-        en_ipa TEXT,
-        en_level TEXT,
-        han_viet TEXT,
-        cn_character TEXT,
-        cn_pinyin TEXT,
-        cn_level TEXT,
-        example_sentence TEXT,
-        context_note TEXT,
-        study_status TEXT DEFAULT 'new',
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
-      );
-    ''');
-
-    await db
-        .execute('CREATE INDEX idx_vietnamese ON flashcards_local(vietnamese)');
-    await db.execute('CREATE INDEX idx_english ON flashcards_local(english)');
-    await db.execute('CREATE INDEX idx_jp_level ON flashcards_local(jp_level)');
-
-    print('✅ Local database created with indexes');
-  }
-
-  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
-    print('🔄 Upgrading database from version $oldVersion to $newVersion');
-    if (oldVersion < 2) {
-      await db.execute('DROP TABLE IF EXISTS flashcards_local');
-      await _onCreate(db, newVersion);
-      print('✅ Database upgraded successfully');
-    }
   }
 
   // ============ COMMON CRUD OPERATIONS ============
@@ -1016,6 +975,242 @@ class LocalDatabase {
     } catch (e) {
       print('❌ Error counting flashcards: $e');
       return 0;
+    }
+  }
+
+  // ==================== USER PROGRESS OPERATIONS ====================
+
+  Future<List<UserProgress>> getAllUserProgress() async {
+    if (_useSharedPrefs) {
+      // SharedPreferences mode
+      final prefs = await SharedPreferences.getInstance();
+      final String? data = prefs.getString('user_progress');
+      if (data == null) return [];
+      try {
+        final List<dynamic> jsonList = jsonDecode(data);
+        return jsonList.map((json) => UserProgress.fromJson(json)).toList();
+      } catch (e) {
+        print('❌ Error parsing user progress: $e');
+        return [];
+      }
+    }
+
+    final db = await database;
+    try {
+      final List<Map<String, dynamic>> maps =
+          await db.query('user_progress_local');
+      return List.generate(maps.length, (i) {
+        return UserProgress.fromJson(maps[i]);
+      });
+    } catch (e) {
+      print('❌ Error getting all user progress: $e');
+      return [];
+    }
+  }
+
+  Future<UserProgress?> getUserProgressByFlashcardId(String flashcardId) async {
+    if (_useSharedPrefs) {
+      final all = await getAllUserProgress();
+      try {
+        return all.firstWhere((p) => p.flashcardId.toString() == flashcardId);
+      } catch (e) {
+        return null;
+      }
+    }
+
+    final db = await database;
+    try {
+      final List<Map<String, dynamic>> maps = await db.query(
+        'user_progress_local',
+        where: 'flashcard_id = ?',
+        whereArgs: [int.tryParse(flashcardId) ?? 0],
+      );
+
+      if (maps.isEmpty) return null;
+      return UserProgress.fromJson(maps.first);
+    } catch (e) {
+      print('❌ Error getting user progress by flashcard id: $e');
+      return null;
+    }
+  }
+
+  Future<UserProgress> insertUserProgress(UserProgress progress) async {
+    if (_useSharedPrefs) {
+      final all = await getAllUserProgress();
+      // Kiểm tra trùng
+      final existingIndex =
+          all.indexWhere((p) => p.flashcardId == progress.flashcardId);
+      if (existingIndex != -1) {
+        all[existingIndex] = progress;
+      } else {
+        all.add(progress);
+      }
+      await _saveUserProgressToPrefs(all);
+      return progress;
+    }
+
+    final db = await database;
+    try {
+      await db.insert(
+        'user_progress_local',
+        progress.toJson(),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      return progress;
+    } catch (e) {
+      print('❌ Error inserting user progress: $e');
+      rethrow;
+    }
+  }
+
+  Future<UserProgress> updateUserProgress(UserProgress progress) async {
+    if (_useSharedPrefs) {
+      final all = await getAllUserProgress();
+      final index =
+          all.indexWhere((p) => p.flashcardId == progress.flashcardId);
+      if (index != -1) {
+        all[index] = progress;
+        await _saveUserProgressToPrefs(all);
+      } else {
+        all.add(progress);
+        await _saveUserProgressToPrefs(all);
+      }
+      return progress;
+    }
+
+    final db = await database;
+    try {
+      await db.update(
+        'user_progress_local',
+        progress.toJson(),
+        where: 'flashcard_id = ?',
+        whereArgs: [progress.flashcardId],
+      );
+      return progress;
+    } catch (e) {
+      print('❌ Error updating user progress: $e');
+      rethrow;
+    }
+  }
+
+  Future<int> deleteUserProgress(String flashcardId) async {
+    if (_useSharedPrefs) {
+      final all = await getAllUserProgress();
+      final int oldLength = all.length;
+      all.removeWhere((p) => p.flashcardId == flashcardId);
+      final int newLength = all.length;
+      await _saveUserProgressToPrefs(all);
+      return oldLength - newLength; // Trả về số lượng đã xóa
+    }
+
+    final db = await database;
+    try {
+      final result = await db.delete(
+        'user_progress_local',
+        where: 'flashcard_id = ?',
+        whereArgs: [flashcardId],
+      );
+      return result;
+    } catch (e) {
+      print('❌ Error deleting user progress: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> _saveUserProgressToPrefs(List<UserProgress> progresses) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonList = progresses.map((p) => p.toJson()).toList();
+      await prefs.setString('user_progress', jsonEncode(jsonList));
+    } catch (e) {
+      print('❌ Error saving user progress to prefs: $e');
+    }
+  }
+
+  Future<void> _onCreate(Database db, int version) async {
+    print('🔄 Creating database tables...');
+
+    // Bảng flashcards_local
+    await db.execute('''
+    CREATE TABLE flashcards_local (
+      id TEXT PRIMARY KEY,
+      vietnamese TEXT NOT NULL,
+      jp_kanji TEXT,
+      jp_reading TEXT,
+      jp_type TEXT,
+      jp_detail_type TEXT,
+      jp_level TEXT,
+      english TEXT,
+      en_ipa TEXT,
+      en_level TEXT,
+      han_viet TEXT,
+      cn_character TEXT,
+      cn_pinyin TEXT,
+      cn_level TEXT,
+      example_sentence TEXT,
+      context_note TEXT,
+      study_status TEXT DEFAULT 'new',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  ''');
+
+    // ⭐ Bảng user_progress_local
+    await db.execute('''
+    CREATE TABLE user_progress_local (
+      id TEXT PRIMARY KEY,
+      flashcard_id INTEGER NOT NULL,
+      study_status TEXT DEFAULT 'new',
+      srs_interval INTEGER DEFAULT 0,
+      srs_ease_factor REAL DEFAULT 2.5,
+      srs_next_review TEXT,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (flashcard_id) REFERENCES flashcards_local(id) ON DELETE CASCADE,
+      UNIQUE(flashcard_id)
+    )
+  ''');
+
+    // Index cho user_progress_local
+    await db.execute(
+        'CREATE INDEX idx_user_progress_local_flashcard_id ON user_progress_local(flashcard_id)');
+    await db.execute(
+        'CREATE INDEX idx_user_progress_local_study_status ON user_progress_local(study_status)');
+
+    // Index cho flashcards_local
+    await db
+        .execute('CREATE INDEX idx_vietnamese ON flashcards_local(vietnamese)');
+    await db.execute('CREATE INDEX idx_english ON flashcards_local(english)');
+    await db.execute('CREATE INDEX idx_jp_level ON flashcards_local(jp_level)');
+
+    print('✅ Local database created with user_progress table');
+  }
+
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    print('🔄 Upgrading database from version $oldVersion to $newVersion');
+
+    if (oldVersion < 2) {
+      // Tạo bảng user_progress_local cho version mới
+      await db.execute('''
+      CREATE TABLE user_progress_local (
+        id TEXT PRIMARY KEY,
+        flashcard_id INTEGER NOT NULL,
+        study_status TEXT DEFAULT 'new',
+        srs_interval INTEGER DEFAULT 0,
+        srs_ease_factor REAL DEFAULT 2.5,
+        srs_next_review TEXT,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (flashcard_id) REFERENCES flashcards_local(id) ON DELETE CASCADE,
+        UNIQUE(flashcard_id)
+      )
+    ''');
+
+      await db.execute(
+          'CREATE INDEX idx_user_progress_local_flashcard_id ON user_progress_local(flashcard_id)');
+      await db.execute(
+          'CREATE INDEX idx_user_progress_local_study_status ON user_progress_local(study_status)');
+
+      print('✅ Database upgraded to version $newVersion');
     }
   }
 }

@@ -2,7 +2,9 @@
 
 import 'dart:async';
 
+import 'package:flashcard_app/core/providers/auth_provider.dart';
 import 'package:flashcard_app/core/providers/theme_provider.dart';
+import 'package:flashcard_app/features/flashcard/data/datasources/supabase_source.dart';
 import 'package:flip_card/flip_card_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -343,7 +345,34 @@ class _StudyPageState extends ConsumerState<StudyPage> {
       await localDb.updateFlashcard(updatedCard);
       print('✅ Database updated: ${updatedCard.vietnamese} -> $newStatus');
 
-      // 3. Cập nhật danh sách hiển thị trong Study Page
+      // 3. Cập nhật user_progress
+      final existingProgress =
+          await localDb.getUserProgressByFlashcardId(cardId);
+
+      if (existingProgress == null) {
+        // Tạo mới progress
+        final newProgress = UserProgress(
+          id: '',
+          userId: ref.read(authNotifierProvider).user?.id ?? '',
+          flashcardId: int.tryParse(cardId) ?? 0,
+          studyStatus: newStatus,
+          srsInterval: 0,
+          srsEaseFactor: 2.5,
+          srsNextReview: null,
+        );
+        await localDb.insertUserProgress(newProgress);
+        print('✅ Created new progress for card $cardId');
+      } else {
+        // Cập nhật progress
+        final updatedProgress = existingProgress.copyWith(
+          studyStatus: newStatus,
+          updatedAt: DateTime.now(),
+        );
+        await localDb.updateUserProgress(updatedProgress);
+        print('✅ Updated progress for card $cardId');
+      }
+
+      // 4. Cập nhật danh sách hiển thị
       final displayIndex = _displayCards.indexWhere((c) => c.id == cardId);
       if (displayIndex != -1) {
         setState(() {
@@ -352,7 +381,7 @@ class _StudyPageState extends ConsumerState<StudyPage> {
         print('✅ Updated display list at index $displayIndex');
       }
 
-      // 4. Thông báo
+      // 5. Thông báo
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -1546,82 +1575,152 @@ class _StudyPageState extends ConsumerState<StudyPage> {
 
   Widget _buildBottomControls() {
     final isSrsEnabled = ref.watch(srsEnabledProvider);
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
     final reviewCards = ref.watch(reviewQueueProvider);
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isMobile = screenWidth < 600;
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
+        color: isDarkMode ? const Color(0xFF1A1A2E) : Colors.white,
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 4,
-            offset: const Offset(0, -2),
+            color: Colors.black.withOpacity(0.08),
+            blurRadius: 8,
+            offset: const Offset(0, -4),
           ),
         ],
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // SRS Row
+          // SRS Toggle + Review Queue
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
-              // SRS Enable toggle
+              // SRS Toggle
               Row(
                 children: [
-                  const Icon(Icons.psychology, size: 20, color: Colors.purple),
+                  Icon(
+                    Icons.psychology,
+                    size: isMobile ? 18 : 20,
+                    color: isSrsEnabled ? Colors.purple : Colors.grey,
+                  ),
                   const SizedBox(width: 4),
                   Switch(
                     value: isSrsEnabled,
-                    onChanged: (value) {
-                      ref.read(srsEnabledProvider.notifier).state = value;
-                      if (value) {
-                        _loadReviewQueue();
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('🧠 SRS enabled'),
-                            duration: Duration(seconds: 1),
-                          ),
-                        );
-                      } else {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('⏹️ SRS disabled'),
-                            duration: Duration(seconds: 1),
-                          ),
-                        );
-                      }
-                    },
+                    onChanged: _toggleSrs,
                     activeTrackColor: Colors.purple,
                     activeThumbColor: Colors.purple.shade700,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  Text(
+                    isSrsEnabled ? 'SRS ON' : 'SRS OFF',
+                    style: TextStyle(
+                      fontSize: isMobile ? 10 : 12,
+                      fontWeight:
+                          isSrsEnabled ? FontWeight.bold : FontWeight.normal,
+                      color: isSrsEnabled ? Colors.purple : Colors.grey,
+                    ),
                   ),
                 ],
               ),
-              // SRS Review Queue button
+
+              // Review Queue
               if (isSrsEnabled)
-                Badge(
-                  label: Text('${reviewCards.length}'),
-                  isLabelVisible: reviewCards.isNotEmpty,
-                  child: IconButton(
-                    icon: const Icon(Icons.assignment, color: Colors.orange),
-                    onPressed: _showReviewQueue,
-                    tooltip: 'Review Queue',
+                GestureDetector(
+                  onTap: _showReviewQueue,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.orange.shade200),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.assignment,
+                            size: 16, color: Colors.orange),
+                        const SizedBox(width: 4),
+                        Text(
+                          '📚 ${reviewCards.length}',
+                          style: TextStyle(
+                            fontSize: isMobile ? 12 : 14,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.orange,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
             ],
           ),
 
-          const Divider(height: 8),
+          const SizedBox(height: 8),
 
-          // Status filter row
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          // Status Filters - Responsive
+          _buildStatusFilters(),
+
+          const SizedBox(height: 8),
+
+          // Shuffle toggle
+          _buildShuffleToggle(),
+        ],
+      ),
+    );
+  }
+
+  // ==================== STATUS FILTERS ====================
+
+  Widget _buildStatusFilters() {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isMobile = screenWidth < 600;
+
+    // Lọc các status đang được chọn
+    final selectedCount = _statusFilters.values.where((v) => v == true).length;
+    final isAllSelected = _statusFilters.values.every((v) => v == true);
+
+    return Column(
+      children: [
+        // Title với thông tin
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              '📚 Filter by status',
+              style: TextStyle(
+                fontSize: isMobile ? 12 : 14,
+                fontWeight: FontWeight.w600,
+                color: isDarkMode ? Colors.white70 : Colors.black54,
+              ),
+            ),
+            Text(
+              '${_currentCards.length} cards',
+              style: TextStyle(
+                fontSize: isMobile ? 11 : 13,
+                color: isDarkMode ? Colors.white54 : Colors.grey,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+
+        // Filter chips - Responsive
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.start,
             children: [
               // All button
-              _buildStatusFilterChip(
+              _buildFilterChip(
                 label: 'All',
-                isSelected: _statusFilters.values.every((v) => v == true),
+                isSelected: isAllSelected,
+                color: Colors.purple,
                 onTap: () {
                   setState(() {
                     final allSelected =
@@ -1637,52 +1736,271 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                     }
                   });
                 },
-                color: Colors.purple,
+                isMobile: isMobile,
               ),
+              const SizedBox(width: 6),
+
+              // Status chips
               ..._statusFilters.keys.map((status) {
-                return _buildStatusFilterChip(
-                  label: _statusLabels[status] ?? status,
-                  isSelected: _statusFilters[status] ?? false,
-                  onTap: () {
-                    setState(() {
-                      _statusFilters[status] =
-                          !(_statusFilters[status] ?? false);
-                      _currentIndex = 0;
-                      if (_pageController.hasClients) {
-                        _pageController.jumpToPage(0);
-                      }
-                    });
-                  },
-                  color: _getStatusColor(status),
+                return Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: _buildFilterChip(
+                    label: _statusLabels[status] ?? status,
+                    isSelected: _statusFilters[status] ?? false,
+                    color: _getStatusColor(status),
+                    onTap: () {
+                      setState(() {
+                        _statusFilters[status] =
+                            !(_statusFilters[status] ?? false);
+                        _currentIndex = 0;
+                        if (_pageController.hasClients) {
+                          _pageController.jumpToPage(0);
+                        }
+                      });
+                    },
+                    isMobile: isMobile,
+                  ),
                 );
               }).toList(),
             ],
           ),
-          const SizedBox(height: 8),
-          // Shuffle toggle
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.shuffle, size: 20, color: Colors.grey),
-              const SizedBox(width: 8),
-              Switch(
-                value: _isShuffled,
-                onChanged: _toggleShuffle,
-                activeTrackColor: Colors.orange,
-                activeThumbColor: Colors.orange.shade700,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFilterChip({
+    required String label,
+    required bool isSelected,
+    required Color color,
+    required VoidCallback onTap,
+    required bool isMobile,
+  }) {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+
+    // Rút gọn label cho mobile
+    String displayLabel = label;
+    if (isMobile) {
+      if (label.startsWith('🆕'))
+        displayLabel = 'New';
+      else if (label.startsWith('📖'))
+        displayLabel = 'Learn';
+      else if (label.startsWith('🔄'))
+        displayLabel = 'Review';
+      else if (label.startsWith('⭐')) displayLabel = 'Master';
+    }
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: EdgeInsets.symmetric(
+          horizontal: isMobile ? 8 : 12,
+          vertical: isMobile ? 4 : 6,
+        ),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? color.withOpacity(isDarkMode ? 0.3 : 0.15)
+              : (isDarkMode ? Colors.grey.shade800 : Colors.grey.shade100),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isSelected
+                ? color
+                : (isDarkMode ? Colors.grey.shade700 : Colors.grey.shade300),
+            width: isSelected ? 2 : 1,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (isSelected)
+              Icon(
+                Icons.check_circle,
+                size: isMobile ? 12 : 14,
+                color: color,
+              )
+            else
+              Icon(
+                Icons.circle_outlined,
+                size: isMobile ? 12 : 14,
+                color: isDarkMode ? Colors.grey.shade500 : Colors.grey.shade400,
               ),
-              const SizedBox(width: 8),
+            const SizedBox(width: 4),
+            Text(
+              displayLabel,
+              style: TextStyle(
+                fontSize: isMobile ? 10 : 12,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                color: isSelected
+                    ? color
+                    : (isDarkMode
+                        ? Colors.grey.shade400
+                        : Colors.grey.shade600),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ==================== SHUFFLE TOGGLE ====================
+
+  // ==================== SHUFFLE TOGGLE ====================
+
+  Widget _buildShuffleToggle() {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isMobile = screenWidth < 600;
+
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(
+          Icons.shuffle,
+          size: isMobile ? 16 : 20,
+          color: _isShuffled
+              ? Colors.orange
+              : (isDarkMode ? Colors.grey.shade600 : Colors.grey.shade400),
+        ),
+        const SizedBox(width: 8),
+        Switch(
+          value: _isShuffled,
+          onChanged: _toggleShuffle,
+          activeTrackColor: Colors.orange,
+          activeThumbColor: Colors.orange.shade700,
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+        const SizedBox(width: 8),
+        Text(
+          _isShuffled ? 'Shuffle ON' : 'Shuffle OFF',
+          style: TextStyle(
+            fontSize: isMobile ? 11 : 12,
+            fontWeight: _isShuffled ? FontWeight.bold : FontWeight.normal,
+            color: _isShuffled
+                ? Colors.orange
+                : (isDarkMode ? Colors.grey.shade500 : Colors.grey.shade400),
+          ),
+        ),
+      ],
+    );
+  }
+
+// ==================== SRS CONTROLS ====================
+
+  Widget _buildSRSControls() {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final reviewCards = ref.watch(reviewQueueProvider);
+
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      children: [
+        // Again button
+        _buildSRSButton(
+          label: 'Again',
+          color: Colors.red,
+          icon: Icons.refresh,
+          onTap: () {
+            final card = _currentCards[_currentIndex];
+            _updateSrsStatus(card.id, 'again');
+          },
+        ),
+        // Hard button
+        _buildSRSButton(
+          label: 'Hard',
+          color: Colors.orange,
+          icon: Icons.sentiment_dissatisfied,
+          onTap: () {
+            final card = _currentCards[_currentIndex];
+            _updateSrsStatus(card.id, 'hard');
+          },
+        ),
+        // Good button
+        _buildSRSButton(
+          label: 'Good',
+          color: Colors.blue,
+          icon: Icons.sentiment_satisfied,
+          onTap: () {
+            final card = _currentCards[_currentIndex];
+            _updateSrsStatus(card.id, 'good');
+          },
+        ),
+        // Easy button
+        _buildSRSButton(
+          label: 'Easy',
+          color: Colors.green,
+          icon: Icons.sentiment_very_satisfied,
+          onTap: () {
+            final card = _currentCards[_currentIndex];
+            _updateSrsStatus(card.id, 'easy');
+          },
+        ),
+        // Review Queue badge
+        Container(
+          padding: const EdgeInsets.all(4),
+          decoration: BoxDecoration(
+            color: Colors.orange.shade50,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.orange.shade200),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.assignment, size: 18, color: Colors.orange),
+              const SizedBox(width: 4),
               Text(
-                _isShuffled ? 'Shuffle ON' : 'Shuffle OFF',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: _isShuffled ? Colors.orange : Colors.grey,
-                  fontWeight: _isShuffled ? FontWeight.bold : FontWeight.normal,
+                '${reviewCards.length}',
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.orange,
                 ),
               ),
             ],
           ),
-        ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSRSButton({
+    required String label,
+    required Color color,
+    required IconData icon,
+    required VoidCallback onTap,
+  }) {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final isMobile = MediaQuery.of(context).size.width < 600;
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: EdgeInsets.symmetric(
+          horizontal: isMobile ? 6 : 10,
+          vertical: isMobile ? 4 : 6,
+        ),
+        decoration: BoxDecoration(
+          color: color.withOpacity(isDarkMode ? 0.2 : 0.1),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: color.withOpacity(0.5),
+            width: 1.5,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: isMobile ? 14 : 18, color: color),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: isMobile ? 10 : 12,
+                fontWeight: FontWeight.w600,
+                color: color,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1759,6 +2077,7 @@ class _StudyPageState extends ConsumerState<StudyPage> {
     final isTtsEnabled = ttsSettings['enabled'] ?? true;
     final currentLanguage = ttsSettings['language'] ?? 'ja';
     final themeColor = ref.watch(themeColorProvider);
+    final isSrsEnabled = ref.watch(srsEnabledProvider);
 
     // Lấy danh sách fields từ settings
     List<String> frontFields = [];
@@ -1802,27 +2121,20 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                 ? Border.all(color: Colors.grey[800]!, width: 1)
                 : null,
           ),
-          child: Column(
+          child: const Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Icon(Icons.warning, size: 48, color: Colors.orange),
-              const SizedBox(height: 16),
+              SizedBox(height: 16),
               Text(
                 '⚠️ No fields selected for front side',
-                style: TextStyle(
-                  fontSize: 18,
-                  color: textColor,
-                  fontWeight: FontWeight.bold,
-                ),
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 textAlign: TextAlign.center,
               ),
-              const SizedBox(height: 8),
+              SizedBox(height: 8),
               Text(
                 'Please add fields in Settings → Customize',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: subtitleColor,
-                ),
+                style: TextStyle(fontSize: 14),
                 textAlign: TextAlign.center,
               ),
             ],
@@ -1836,7 +2148,7 @@ class _StudyPageState extends ConsumerState<StudyPage> {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       child: Container(
         width: double.infinity,
-        padding: const EdgeInsets.all(32),
+        padding: const EdgeInsets.all(24),
         decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topLeft,
@@ -1898,10 +2210,88 @@ class _StudyPageState extends ConsumerState<StudyPage> {
               ),
               const SizedBox(height: 24),
 
-              // CHỈ HIỂN THỊ CÁC FIELD ĐÃ CHỌN, KHÔNG CỐ ĐỊNH
+              // Các fields
               ..._buildFields(card, frontFields, isDarkMode),
 
               const SizedBox(height: 24),
+
+              // ⭐ SRS CONTROLS - HIỂN THỊ Ở CẢ 2 MẶT KHI BẬT SRS
+              if (isSrsEnabled) ...[
+                const Divider(),
+                const SizedBox(height: 8),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      'How well did you know?',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        color: textColor,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                // SRS Buttons
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    _buildSRSButtonInCard(
+                      label: 'Again',
+                      color: Colors.red,
+                      icon: Icons.refresh,
+                      onTap: () {
+                        _updateSrsStatus(card.id, 'again');
+                      },
+                    ),
+                    _buildSRSButtonInCard(
+                      label: 'Hard',
+                      color: Colors.orange,
+                      icon: Icons.sentiment_dissatisfied,
+                      onTap: () {
+                        _updateSrsStatus(card.id, 'hard');
+                      },
+                    ),
+                    _buildSRSButtonInCard(
+                      label: 'Good',
+                      color: Colors.blue,
+                      icon: Icons.sentiment_satisfied,
+                      onTap: () {
+                        _updateSrsStatus(card.id, 'good');
+                      },
+                    ),
+                    _buildSRSButtonInCard(
+                      label: 'Easy',
+                      color: Colors.green,
+                      icon: Icons.sentiment_very_satisfied,
+                      onTap: () {
+                        _updateSrsStatus(card.id, 'easy');
+                      },
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                // SRS Info
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: isDarkMode
+                        ? Colors.grey.shade800
+                        : Colors.grey.shade100,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    _getSrsInfo(card),
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: subtitleColor,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+              ],
 
               // Hint
               Container(
@@ -2007,27 +2397,20 @@ class _StudyPageState extends ConsumerState<StudyPage> {
                 ? Border.all(color: Colors.grey[800]!, width: 1)
                 : null,
           ),
-          child: Column(
+          child: const Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Icon(Icons.warning, size: 48, color: Colors.orange),
-              const SizedBox(height: 16),
+              SizedBox(height: 16),
               Text(
                 '⚠️ No fields selected for back side',
-                style: TextStyle(
-                  fontSize: 18,
-                  color: textColor,
-                  fontWeight: FontWeight.bold,
-                ),
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 textAlign: TextAlign.center,
               ),
-              const SizedBox(height: 8),
+              SizedBox(height: 8),
               Text(
                 'Please add fields in Settings → Customize',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: subtitleColor,
-                ),
+                style: TextStyle(fontSize: 14),
                 textAlign: TextAlign.center,
               ),
             ],
@@ -2041,7 +2424,7 @@ class _StudyPageState extends ConsumerState<StudyPage> {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       child: Container(
         width: double.infinity,
-        padding: const EdgeInsets.all(32),
+        padding: const EdgeInsets.all(24),
         decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topLeft,
@@ -2103,56 +2486,88 @@ class _StudyPageState extends ConsumerState<StudyPage> {
               ),
               const SizedBox(height: 16),
 
-              // CHỈ HIỂN THỊ CÁC FIELD ĐÃ CHỌN, KHÔNG CỐ ĐỊNH
+              // Các fields
               ..._buildFields(card, backFields, isDarkMode),
 
               const SizedBox(height: 16),
 
-              // SRS Rating (nếu bật)
+              // ⭐ SRS CONTROLS - HIỂN THỊ Ở CẢ 2 MẶT KHI BẬT SRS
               if (isSrsEnabled) ...[
                 const Divider(),
                 const SizedBox(height: 8),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Text(
-                      'Rate your recall:',
-                      style:
-                          TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
-                    ),
-                    const SizedBox(width: 8),
-                    IconButton(
-                      icon: const Icon(Icons.sentiment_very_dissatisfied,
-                          color: Colors.red),
-                      onPressed: () {
-                        _updateSrsStatus(card.id, 'hard');
-                      },
-                      tooltip: 'Hard',
-                      iconSize: 28,
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.sentiment_neutral,
-                          color: Colors.orange),
-                      onPressed: () {
-                        _updateSrsStatus(card.id, 'medium');
-                      },
-                      tooltip: 'Medium',
-                      iconSize: 28,
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.sentiment_very_satisfied,
-                          color: Colors.green),
-                      onPressed: () {
-                        _updateSrsStatus(card.id, 'easy');
-                      },
-                      tooltip: 'Easy',
-                      iconSize: 28,
+                    Text(
+                      'How well did you know?',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        color: textColor,
+                      ),
                     ),
                   ],
                 ),
+                const SizedBox(height: 8),
+                // SRS Buttons
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    _buildSRSButtonInCard(
+                      label: 'Again',
+                      color: Colors.red,
+                      icon: Icons.refresh,
+                      onTap: () {
+                        _updateSrsStatus(card.id, 'again');
+                      },
+                    ),
+                    _buildSRSButtonInCard(
+                      label: 'Hard',
+                      color: Colors.orange,
+                      icon: Icons.sentiment_dissatisfied,
+                      onTap: () {
+                        _updateSrsStatus(card.id, 'hard');
+                      },
+                    ),
+                    _buildSRSButtonInCard(
+                      label: 'Good',
+                      color: Colors.blue,
+                      icon: Icons.sentiment_satisfied,
+                      onTap: () {
+                        _updateSrsStatus(card.id, 'good');
+                      },
+                    ),
+                    _buildSRSButtonInCard(
+                      label: 'Easy',
+                      color: Colors.green,
+                      icon: Icons.sentiment_very_satisfied,
+                      onTap: () {
+                        _updateSrsStatus(card.id, 'easy');
+                      },
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                // SRS Info
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: isDarkMode
+                        ? Colors.grey.shade800
+                        : Colors.grey.shade100,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    _getSrsInfo(card),
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: subtitleColor,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
               ],
-
-              const SizedBox(height: 16),
 
               // Hint
               Container(
@@ -3786,6 +4201,8 @@ class _StudyPageState extends ConsumerState<StudyPage> {
 
   // ==================== SRS FUNCTIONS ====================
 
+  // ==================== SRS FUNCTIONS ====================
+
   Future<void> _updateSrsStatus(String cardId, String difficulty) async {
     try {
       print('🔄 Updating SRS for card $cardId with difficulty: $difficulty');
@@ -3801,18 +4218,21 @@ class _StudyPageState extends ConsumerState<StudyPage> {
 
       final card = allCards[cardIndex];
 
-      // SM-2 Algorithm
-      // difficulty: 'easy', 'medium', 'hard'
+      // SM-2 Algorithm với 4 mức
+      // again: 0, hard: 1, good: 3, easy: 5
       double quality = 0;
       switch (difficulty) {
-        case 'easy':
-          quality = 5;
-          break;
-        case 'medium':
-          quality = 3;
+        case 'again':
+          quality = 0;
           break;
         case 'hard':
           quality = 1;
+          break;
+        case 'good':
+          quality = 3;
+          break;
+        case 'easy':
+          quality = 5;
           break;
         default:
           quality = 3;
@@ -3822,30 +4242,41 @@ class _StudyPageState extends ConsumerState<StudyPage> {
       int newInterval = card.interval ?? 1;
       double newEaseFactor = card.easeFactor ?? 2.5;
 
-      // Cập nhật ease factor
-      newEaseFactor =
-          newEaseFactor + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02));
-      if (newEaseFactor < 1.3) newEaseFactor = 1.3;
-
-      // Cập nhật interval
-      if (quality >= 3) {
-        // Trả lời đúng
-        if (newInterval == 1) {
-          newInterval = 1;
-        } else if (newInterval == 2) {
-          newInterval = 6;
-        } else {
-          newInterval = (newInterval * newEaseFactor).round();
-        }
-      } else {
-        // Trả lời sai
-        newInterval = 1;
+      if (quality == 0) {
+        // Again: reset về 0
+        newInterval = 0;
         newEaseFactor = 2.5;
+      } else {
+        // Cập nhật ease factor
+        newEaseFactor = newEaseFactor +
+            (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02));
+        if (newEaseFactor < 1.3) newEaseFactor = 1.3;
+
+        // Cập nhật interval
+        if (quality >= 3) {
+          // Trả lời đúng
+          if (newInterval == 0) {
+            newInterval = 1;
+          } else if (newInterval == 1) {
+            newInterval = 6;
+          } else {
+            newInterval = (newInterval * newEaseFactor).round();
+          }
+        } else {
+          // Trả lời sai (hard)
+          if (newInterval == 0) {
+            newInterval = 1;
+          } else {
+            newInterval = 1;
+            newEaseFactor = 2.5;
+          }
+        }
       }
 
       // Tính ngày review tiếp theo
       final now = DateTime.now();
-      final nextReview = now.add(Duration(days: newInterval));
+      final nextReview =
+          newInterval == 0 ? now : now.add(Duration(days: newInterval));
 
       // Cập nhật card
       final updatedCard = card.copyWith(
@@ -3856,8 +4287,7 @@ class _StudyPageState extends ConsumerState<StudyPage> {
       );
 
       await localDb.updateFlashcard(updatedCard);
-      print(
-          '✅ SRS updated: interval=$newInterval, ease=$newEaseFactor, next=$nextReview');
+      print('✅ SRS updated: interval=$newInterval, ease=$newEaseFactor');
 
       // Cập nhật danh sách hiển thị
       final displayIndex = _displayCards.indexWhere((c) => c.id == cardId);
@@ -3869,6 +4299,22 @@ class _StudyPageState extends ConsumerState<StudyPage> {
 
       // Cập nhật review queue
       await _loadReviewQueue();
+
+      // Chuyển sang thẻ tiếp theo
+      if (_currentIndex < _currentCards.length - 1) {
+        _pageController.nextPage(
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeInOut,
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('🎉 You completed all cards!'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -3892,24 +4338,26 @@ class _StudyPageState extends ConsumerState<StudyPage> {
     }
   }
 
+  String _getDifficultyLabel(String difficulty) {
+    switch (difficulty) {
+      case 'again':
+        return '🔄 Again';
+      case 'hard':
+        return '🔴 Hard';
+      case 'good':
+        return '🟡 Good';
+      case 'easy':
+        return '🟢 Easy';
+      default:
+        return difficulty;
+    }
+  }
+
   String _getStudyStatusFromQuality(double quality) {
     if (quality >= 4) return 'mastered';
     if (quality >= 3) return 'reviewing';
     if (quality >= 2) return 'learning';
     return 'new';
-  }
-
-  String _getDifficultyLabel(String difficulty) {
-    switch (difficulty) {
-      case 'easy':
-        return '🟢 Easy';
-      case 'medium':
-        return '🟡 Medium';
-      case 'hard':
-        return '🔴 Hard';
-      default:
-        return difficulty;
-    }
   }
 
   Future<void> _loadReviewQueue() async {
@@ -4307,6 +4755,66 @@ class _StudyPageState extends ConsumerState<StudyPage> {
       print('📂 Loaded all study settings');
     } catch (e) {
       print('❌ Error loading study settings: $e');
+    }
+  }
+
+  // SRS Button trong thẻ (dùng cho cả front và back)
+  Widget _buildSRSButtonInCard({
+    required String label,
+    required Color color,
+    required IconData icon,
+    required VoidCallback onTap,
+  }) {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final isMobile = MediaQuery.of(context).size.width < 600;
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: EdgeInsets.symmetric(
+          horizontal: isMobile ? 6 : 10,
+          vertical: isMobile ? 4 : 6,
+        ),
+        decoration: BoxDecoration(
+          color: color.withOpacity(isDarkMode ? 0.2 : 0.1),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: color.withOpacity(0.5),
+            width: 1.5,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: isMobile ? 14 : 18, color: color),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: isMobile ? 10 : 12,
+                fontWeight: FontWeight.w600,
+                color: color,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Trong study_page.dart, thêm hàm sync khi thay đổi status
+  Future<void> _syncStatusToServer(String cardId, String newStatus) async {
+    final authState = ref.read(authNotifierProvider);
+
+    // Chỉ sync khi đã đăng nhập
+    if (!authState.isAuthenticated) return;
+
+    try {
+      final supabaseSource = SupabaseSource();
+      await supabaseSource.syncStudyStatus(cardId, newStatus);
+      print('✅ Synced status to server: $cardId -> $newStatus');
+    } catch (e) {
+      print('❌ Failed to sync to server: $e');
     }
   }
 }

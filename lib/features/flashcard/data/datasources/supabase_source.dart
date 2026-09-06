@@ -469,24 +469,59 @@ class SupabaseSource implements FlashcardSource {
     }
   }
 
-// Load study status từ Supabase
   Future<Map<String, String>> loadStudyStatus() async {
     try {
       final user = SupabaseConfig.currentUser;
       if (user == null) {
-        throw Exception('User not authenticated');
+        print('⚠️ User not authenticated');
+        return {};
       }
 
       print('📥 Loading study statuses from Supabase...');
 
-      final response = await _client
-          .from('flashcards')
-          .select('id, study_status')
-          .eq('user_id', user.id);
-
       final Map<String, String> statusMap = {};
-      for (var item in response) {
-        statusMap[item['id']] = item['study_status'] ?? 'new';
+      int page = 0;
+      int pageSize = 500;
+      bool hasMore = true;
+
+      while (hasMore) {
+        final from = page * pageSize;
+        final to = from + pageSize - 1;
+
+        print('📄 Fetching page ${page + 1} (range: $from - $to)');
+
+        final response = await _client
+            .from('flashcards')
+            .select('id, study_status')
+            .eq('user_id', user.id)
+            .range(from, to);
+
+        // KIỂM TRA RESPONSE KHÔNG NULL
+        if (response == null) {
+          print('⚠️ Response is null');
+          hasMore = false;
+          break;
+        }
+
+        if (response.isEmpty) {
+          hasMore = false;
+          break;
+        }
+
+        for (var item in response) {
+          // KIỂM TRA ITEM VÀ ID KHÔNG NULL
+          if (item != null && item['id'] != null) {
+            final id = item['id'].toString();
+            final status = item['study_status']?.toString() ?? 'new';
+            statusMap[id] = status;
+          }
+        }
+
+        if (response.length < pageSize) {
+          hasMore = false;
+        }
+
+        page++;
       }
 
       print('✅ Loaded ${statusMap.length} study statuses');
