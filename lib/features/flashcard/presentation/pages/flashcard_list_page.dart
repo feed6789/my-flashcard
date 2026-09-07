@@ -4,6 +4,7 @@ import 'package:flashcard_app/core/providers/theme_provider.dart';
 import 'package:flashcard_app/features/flashcard/data/datasources/supabase_source.dart';
 import 'package:flashcard_app/features/flashcard/data/datasources/user_progress_source.dart';
 import 'package:flashcard_app/features/flashcard/data/models/user_progress_model.dart';
+import 'package:flashcard_app/features/flashcard/data/services/excel_export_service.dart';
 import 'package:flashcard_app/features/flashcard/presentation/widgets/color_picker_dialog.dart';
 import 'package:flashcard_app/features/flashcard/presentation/widgets/login_dialog.dart';
 import 'package:flutter/material.dart';
@@ -1167,6 +1168,54 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
               ),
             ],
           ),
+          // Nút Export
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.download),
+            tooltip: 'Export',
+            onSelected: (value) async {
+              final localCards = ref.read(localFlashcardsProvider);
+              if (localCards.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('No flashcards to export'),
+                    backgroundColor: Colors.orange,
+                  ),
+                );
+                return;
+              }
+
+              final exportService = ExcelExportService();
+              if (value == 'all') {
+                await exportService.exportWithFormat(context, localCards);
+              } else if (value == 'filtered') {
+                // Export các card đang hiển thị (đã lọc)
+                final filteredCards = ref.read(localFlashcardsProvider);
+                await exportService.exportWithFormat(context, filteredCards);
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'all',
+                child: Row(
+                  children: [
+                    Icon(Icons.table_chart),
+                    SizedBox(width: 8),
+                    Text('Export All'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'filtered',
+                child: Row(
+                  children: [
+                    Icon(Icons.filter_alt),
+                    SizedBox(width: 8),
+                    Text('Export Filtered'),
+                  ],
+                ),
+              ),
+            ],
+          ),
 
           // NHÓM 2: Download, Import, Refresh, Delete
           PopupMenuButton<String>(
@@ -1179,6 +1228,9 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                   break;
                 case 'import':
                   _showImportOptions(context);
+                  break;
+                case 'export':
+                  _showExportOptions();
                   break;
                 case 'refresh':
                   ref.invalidate(supabaseFlashcardsProvider);
@@ -1214,6 +1266,16 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                     Icon(Icons.upload_file),
                     SizedBox(width: 8),
                     Text('Import Excel'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'export',
+                child: Row(
+                  children: [
+                    Icon(Icons.download),
+                    SizedBox(width: 8),
+                    Text('Export'),
                   ],
                 ),
               ),
@@ -1650,6 +1712,73 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
     );
   }
 
+  void _showExportOptions() {
+    final localCards = ref.read(localFlashcardsProvider);
+    if (localCards.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No flashcards to export'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    showModalBottomSheet(
+      context: context,
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 12),
+              const Text(
+                'Export Flashcards',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Choose export format',
+                style: TextStyle(color: Colors.grey),
+              ),
+              const Divider(),
+              ListTile(
+                leading: const Icon(Icons.table_chart, color: Colors.green),
+                title: const Text('Excel (.xlsx)'),
+                subtitle: const Text('Export all flashcards'),
+                onTap: () async {
+                  Navigator.pop(context);
+                  final exportService = ExcelExportService();
+                  await exportService.exportWithFormat(context, localCards);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.text_fields, color: Colors.blue),
+                title: const Text('CSV (.csv)'),
+                subtitle: const Text('Export all flashcards'),
+                onTap: () async {
+                  Navigator.pop(context);
+                  final exportService = ExcelExportService();
+                  await exportService.exportToCSV(localCards);
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content:
+                            Text('✅ Exported ${localCards.length} flashcards'),
+                        backgroundColor: Colors.green,
+                        duration: const Duration(seconds: 2),
+                      ),
+                    );
+                  }
+                },
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
+        );
+      },
+    );
+  }
   // ==================== HÀM TẢI TỪ SUPABASE ====================
 
   Future<void> _downloadFromSupabase(BuildContext context) async {
