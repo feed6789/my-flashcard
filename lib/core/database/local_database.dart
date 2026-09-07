@@ -1034,6 +1034,7 @@ class LocalDatabase {
     }
   }
 
+
   Future<UserProgress> insertUserProgress(UserProgress progress) async {
     if (_useSharedPrefs) {
       final all = await getAllUserProgress();
@@ -1058,7 +1059,7 @@ class LocalDatabase {
       );
       return progress;
     } catch (e) {
-      print('❌ Error inserting user progress: $e');
+      print('❌ Error inserting user progresss: $e');
       rethrow;
     }
   }
