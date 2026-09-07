@@ -5,6 +5,7 @@ import 'dart:async';
 import 'package:flashcard_app/core/providers/auth_provider.dart';
 import 'package:flashcard_app/core/providers/theme_provider.dart';
 import 'package:flashcard_app/features/flashcard/data/datasources/supabase_source.dart';
+import 'package:flashcard_app/features/flashcard/data/models/user_progress_model.dart';
 import 'package:flip_card/flip_card_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -350,7 +351,6 @@ class _StudyPageState extends ConsumerState<StudyPage> {
           await localDb.getUserProgressByFlashcardId(cardId);
 
       if (existingProgress == null) {
-        // Tạo mới progress
         final newProgress = UserProgress(
           id: '',
           userId: ref.read(authNotifierProvider).user?.id ?? '',
