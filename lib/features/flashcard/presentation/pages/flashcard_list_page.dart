@@ -1785,57 +1785,19 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
     final isDownloading = ref.read(isLoadingFromSupabaseProvider.notifier);
     final progress = ref.read(downloadProgressProvider.notifier);
 
-    // Kiểm tra đăng nhập
-    final authState = ref.read(authNotifierProvider);
-    if (!authState.isAuthenticated) {
-      _showLoginDialog();
-      return;
-    }
-
     final localDb = LocalDatabase();
     final existingCards = await localDb.getAllFlashcards();
 
-    // Hỏi người dùng có muốn ghi đè không
-    if (existingCards.isNotEmpty) {
-      final confirm = await showDialog<bool>(
-        context: context,
-        builder: (context) {
-          return AlertDialog(
-            title: const Text('Download from Server'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                    'You already have ${existingCards.length} local flashcards.'),
-                const SizedBox(height: 8),
-                const Text('Do you want to:'),
-                const SizedBox(height: 8),
-                ListTile(
-                  leading: const Icon(Icons.refresh, color: Colors.orange),
-                  title: const Text('Replace (Delete all and download new)'),
-                  subtitle: const Text('All local data will be replaced'),
-                  onTap: () => Navigator.pop(context, true),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.cancel, color: Colors.red),
-                  title: const Text('Cancel'),
-                  onTap: () => Navigator.pop(context, false),
-                ),
-              ],
-            ),
-          );
-        },
-      );
-
-      if (confirm != true) return;
-    }
+    // Lấy danh sách ID đã có ở local
+    final existingIds = existingCards.map((c) => c.id).toSet();
 
     // Bắt đầu tải
     isDownloading.state = true;
     progress.state = 0.0;
 
     try {
+      if (!context.mounted) return;
+
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Row(
@@ -1860,6 +1822,7 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
       progress.state = 0.5;
 
       if (serverCards.isEmpty) {
+        if (!context.mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('No data available on server'),
@@ -1870,9 +1833,34 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
         return;
       }
 
-      // Xóa local và thêm mới
-      await localDb.deleteAllFlashcards();
-      await localDb.insertMultipleFlashcards(serverCards);
+      // ✅ LỌC RA NHỮNG CARD CHƯA CÓ Ở LOCAL
+      final newCards =
+          serverCards.where((card) => !existingIds.contains(card.id)).toList();
+
+      final skippedCount = serverCards.length - newCards.length;
+
+      print('📥 Server: ${serverCards.length} cards');
+      print('📚 Existing local: ${existingIds.length} cards');
+      print('✨ New cards to add: ${newCards.length}');
+      print('⏭️ Skipped (already exist): $skippedCount');
+
+      if (newCards.isEmpty) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content:
+                Text('✅ All ${serverCards.length} cards already exist locally'),
+            backgroundColor: Colors.blue,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+        isDownloading.state = false;
+        progress.state = 0.0;
+        return;
+      }
+
+      // Chỉ thêm những card mới
+      await localDb.insertMultipleFlashcards(newCards);
 
       progress.state = 1.0;
 
@@ -1883,8 +1871,8 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-              '✅ Downloaded ${serverCards.length} flashcards successfully!'),
+          content: Text('✅ Added ${newCards.length} new cards'
+              '${skippedCount > 0 ? " (skipped $skippedCount existing)" : ""}'),
           backgroundColor: Colors.green,
           duration: const Duration(seconds: 3),
         ),
