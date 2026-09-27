@@ -1090,45 +1090,21 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
         title: const Text('Flashcards'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
-          // Nút chuyển theme
+          // 1. Settings (Display + Theme)
           IconButton(
-            icon: Icon(
-              ref.watch(themeModeProvider) == ThemeMode.dark
-                  ? Icons.light_mode
-                  : Icons.dark_mode,
-            ),
-            onPressed: () {
-              final current = ref.read(themeModeProvider);
-              ref.read(themeModeProvider.notifier).state =
-                  current == ThemeMode.dark ? ThemeMode.light : ThemeMode.dark;
-            },
-            tooltip: 'Toggle theme',
+            icon: const Icon(Icons.settings),
+            onPressed: () => _showUnifiedSettings(context),
+            tooltip: 'Settings',
           ),
-          // Nút đổi màu
-          IconButton(
-            icon: const Icon(Icons.color_lens),
-            onPressed: () {
-              showDialog(
-                context: context,
-                builder: (context) => const ColorPickerDialog(),
-              ).then((_) {
-                // Refresh để áp dụng màu mới
-                setState(() {});
-              });
-            },
-            tooltip: 'Change theme color',
-          ),
-          // NHÓM 1: Filter, Settings, Search
+
+          // 2. Filter & Search
           PopupMenuButton<String>(
-            icon: const Icon(Icons.tune),
-            tooltip: 'Filter & Settings',
+            icon: const Icon(Icons.filter_list),
+            tooltip: 'Filter & Search',
             onSelected: (value) {
               switch (value) {
                 case 'filter':
                   _showFilterDialog(context);
-                  break;
-                case 'settings':
-                  _showSettingsDialog(context);
                   break;
                 case 'search':
                   _showSearchDialog(context);
@@ -1140,19 +1116,9 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                 value: 'filter',
                 child: Row(
                   children: [
-                    Icon(Icons.filter_list),
-                    SizedBox(width: 8),
+                    Icon(Icons.filter_alt, size: 20),
+                    SizedBox(width: 12),
                     Text('Filter'),
-                  ],
-                ),
-              ),
-              const PopupMenuItem(
-                value: 'settings',
-                child: Row(
-                  children: [
-                    Icon(Icons.settings),
-                    SizedBox(width: 8),
-                    Text('Settings'),
                   ],
                 ),
               ),
@@ -1160,64 +1126,16 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                 value: 'search',
                 child: Row(
                   children: [
-                    Icon(Icons.search),
-                    SizedBox(width: 8),
+                    Icon(Icons.search, size: 20),
+                    SizedBox(width: 12),
                     Text('Search'),
                   ],
                 ),
               ),
             ],
           ),
-          // Nút Export
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.download),
-            tooltip: 'Export',
-            onSelected: (value) async {
-              final localCards = ref.read(localFlashcardsProvider);
-              if (localCards.isEmpty) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('No flashcards to export'),
-                    backgroundColor: Colors.orange,
-                  ),
-                );
-                return;
-              }
 
-              final exportService = ExcelExportService();
-              if (value == 'all') {
-                await exportService.exportWithFormat(context, localCards);
-              } else if (value == 'filtered') {
-                // Export các card đang hiển thị (đã lọc)
-                final filteredCards = ref.read(localFlashcardsProvider);
-                await exportService.exportWithFormat(context, filteredCards);
-              }
-            },
-            itemBuilder: (context) => [
-              const PopupMenuItem(
-                value: 'all',
-                child: Row(
-                  children: [
-                    Icon(Icons.table_chart),
-                    SizedBox(width: 8),
-                    Text('Export All'),
-                  ],
-                ),
-              ),
-              const PopupMenuItem(
-                value: 'filtered',
-                child: Row(
-                  children: [
-                    Icon(Icons.filter_alt),
-                    SizedBox(width: 8),
-                    Text('Export Filtered'),
-                  ],
-                ),
-              ),
-            ],
-          ),
-
-          // NHÓM 2: Download, Import, Refresh, Delete
+          // 3. Data Management (Import, Export, Download, Refresh, Delete)
           PopupMenuButton<String>(
             icon: const Icon(Icons.folder_open),
             tooltip: 'Data Management',
@@ -1230,18 +1148,14 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                   _showImportOptions(context);
                   break;
                 case 'export':
-                  _showExportOptions();
+                  _showExportOptions(context);
                   break;
                 case 'refresh':
-                  ref.invalidate(supabaseFlashcardsProvider);
-                  // KHÔNG reset _currentPage về 0
-                  _loadFlashcardsWithFilter(keepPage: true);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('🔄 Refreshing data...'),
-                      duration: Duration(seconds: 1),
-                    ),
-                  );
+                  setState(() {
+                    _currentPage = 0;
+                    _totalItems = 0;
+                  });
+                  _loadFlashcardsWithFilter();
                   break;
                 case 'delete_all':
                   _confirmDeleteAll(context);
@@ -1253,8 +1167,8 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                 value: 'download',
                 child: Row(
                   children: [
-                    Icon(Icons.cloud_download),
-                    SizedBox(width: 8),
+                    Icon(Icons.cloud_download, color: Colors.blue, size: 20),
+                    SizedBox(width: 12),
                     Text('Download from Server'),
                   ],
                 ),
@@ -1263,8 +1177,8 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                 value: 'import',
                 child: Row(
                   children: [
-                    Icon(Icons.upload_file),
-                    SizedBox(width: 8),
+                    Icon(Icons.upload_file, color: Colors.green, size: 20),
+                    SizedBox(width: 12),
                     Text('Import Excel'),
                   ],
                 ),
@@ -1273,18 +1187,19 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                 value: 'export',
                 child: Row(
                   children: [
-                    Icon(Icons.download),
-                    SizedBox(width: 8),
+                    Icon(Icons.download, color: Colors.orange, size: 20),
+                    SizedBox(width: 12),
                     Text('Export'),
                   ],
                 ),
               ),
+              const PopupMenuDivider(),
               const PopupMenuItem(
                 value: 'refresh',
                 child: Row(
                   children: [
-                    Icon(Icons.refresh),
-                    SizedBox(width: 8),
+                    Icon(Icons.refresh, size: 20),
+                    SizedBox(width: 12),
                     Text('Refresh'),
                   ],
                 ),
@@ -1293,68 +1208,116 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                 value: 'delete_all',
                 child: Row(
                   children: [
-                    Icon(Icons.delete_sweep, color: Colors.red),
-                    SizedBox(width: 8),
+                    Icon(Icons.delete_sweep, color: Colors.red, size: 20),
+                    SizedBox(width: 12),
                     Text('Delete All', style: TextStyle(color: Colors.red)),
                   ],
                 ),
               ),
             ],
           ),
-          IconButton(
-            icon: _isSyncing
-                ? const SizedBox(
-                    width: 24,
-                    height: 24,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : Icon(
-                    ref.watch(authNotifierProvider).isAuthenticated
-                        ? Icons.cloud_sync
-                        : Icons.cloud_off,
-                    color: ref.watch(authNotifierProvider).isAuthenticated
-                        ? Colors.blue
-                        : Colors.grey,
-                  ),
-            onPressed: _isSyncing ? null : _syncStudyStatus,
-            tooltip: ref.watch(authNotifierProvider).isAuthenticated
-                ? 'Sync to server'
-                : 'Login to sync',
+
+          // 4. Account (Login, Logout, Sync)
+          Consumer(
+            builder: (context, ref, _) {
+              final authState = ref.watch(authNotifierProvider);
+              final isAuthenticated = authState.isAuthenticated;
+
+              return PopupMenuButton<String>(
+                icon: Icon(
+                  isAuthenticated
+                      ? Icons.account_circle
+                      : Icons.account_circle_outlined,
+                  color: isAuthenticated ? Colors.green : null,
+                ),
+                tooltip: 'Account',
+                onSelected: (value) {
+                  switch (value) {
+                    case 'login':
+                      _showLoginDialog();
+                      break;
+                    case 'logout':
+                      _logout();
+                      break;
+                    case 'sync':
+                      _syncStudyStatus();
+                      break;
+                  }
+                },
+                itemBuilder: (context) => [
+                  if (!isAuthenticated)
+                    const PopupMenuItem(
+                      value: 'login',
+                      child: Row(
+                        children: [
+                          Icon(Icons.login, color: Colors.blue, size: 20),
+                          SizedBox(width: 12),
+                          Text('Login'),
+                        ],
+                      ),
+                    ),
+                  if (isAuthenticated) ...[
+                    PopupMenuItem(
+                      enabled: false,
+                      child: Row(
+                        children: [
+                          const Icon(Icons.person,
+                              size: 20, color: Colors.grey),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              authState.user?.email ?? 'Logged in',
+                              style: const TextStyle(
+                                  fontSize: 12, color: Colors.grey),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const PopupMenuDivider(),
+                    PopupMenuItem(
+                      value: 'sync',
+                      enabled: !_isSyncing,
+                      child: Row(
+                        children: [
+                          _isSyncing
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child:
+                                      CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Icon(Icons.cloud_sync,
+                                  color: Colors.green, size: 20),
+                          const SizedBox(width: 12),
+                          const Text('Sync Progress'),
+                        ],
+                      ),
+                    ),
+                    const PopupMenuItem(
+                      value: 'logout',
+                      child: Row(
+                        children: [
+                          Icon(Icons.logout, color: Colors.red, size: 20),
+                          SizedBox(width: 12),
+                          Text('Logout', style: TextStyle(color: Colors.red)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              );
+            },
           ),
 
-// Nút đăng xuất (chỉ hiện khi đã login)
-          if (ref.watch(authNotifierProvider).isAuthenticated)
-            PopupMenuButton<String>(
-              icon: const Icon(Icons.account_circle),
-              onSelected: (value) {
-                if (value == 'logout') {
-                  _logout();
-                }
-              },
-              itemBuilder: (context) => [
-                const PopupMenuItem(
-                  value: 'logout',
-                  child: Row(
-                    children: [
-                      Icon(Icons.logout, color: Colors.red),
-                      SizedBox(width: 8),
-                      Text('Logout'),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-
-          // NHÓM 3: Study
-          // Nút Study
+          // 5. Flashcard (Study)
           if (localCards.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.school),
               onPressed: () {
-                // Cập nhật provider trước khi vào Study
                 ref.read(filteredFlashcardsProvider.notifier).state =
                     localCards;
-
                 Navigator.push(
                   context,
                   MaterialPageRoute(
@@ -1364,14 +1327,12 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                     ),
                   ),
                 ).then((_) {
-                  // KIỂM TRA MOUNTED TRƯỚC KHI GỌI REF
                   if (mounted) {
-                    // Refresh dữ liệu nhưng giữ nguyên trang
                     _loadFlashcardsWithFilter(keepPage: true);
                   }
                 });
               },
-              tooltip: 'Study flashcards',
+              tooltip: 'Study Flashcards',
             ),
         ],
       ),
@@ -1712,7 +1673,7 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
     );
   }
 
-  void _showExportOptions() {
+  void _showExportOptions(BuildContext context) {
     final localCards = ref.read(localFlashcardsProvider);
     if (localCards.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1737,15 +1698,15 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 8),
-              const Text(
-                'Choose export format',
-                style: TextStyle(color: Colors.grey),
+              Text(
+                '${localCards.length} cards',
+                style: const TextStyle(color: Colors.grey),
               ),
               const Divider(),
               ListTile(
                 leading: const Icon(Icons.table_chart, color: Colors.green),
                 title: const Text('Excel (.xlsx)'),
-                subtitle: const Text('Export all flashcards'),
+                subtitle: const Text('Best for editing'),
                 onTap: () async {
                   Navigator.pop(context);
                   final exportService = ExcelExportService();
@@ -1755,7 +1716,7 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
               ListTile(
                 leading: const Icon(Icons.text_fields, color: Colors.blue),
                 title: const Text('CSV (.csv)'),
-                subtitle: const Text('Export all flashcards'),
+                subtitle: const Text('Compatible with many apps'),
                 onTap: () async {
                   Navigator.pop(context);
                   final exportService = ExcelExportService();
@@ -1766,7 +1727,6 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                         content:
                             Text('✅ Exported ${localCards.length} flashcards'),
                         backgroundColor: Colors.green,
-                        duration: const Duration(seconds: 2),
                       ),
                     );
                   }
@@ -3714,5 +3674,534 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
     } catch (e) {
       print('❌ Error loading settings state: $e');
     }
+  }
+
+  Widget _buildDisplaySettingsTab(BuildContext context) {
+    final settings = ref.read(settingsProvider);
+
+    int itemsPerPage = settings['itemsPerPage'] ?? 50;
+    String sortBy = settings['sortBy'] ?? 'id';
+    bool sortAscending = settings['sortAscending'] ?? true;
+    Map<String, bool> showFields =
+        Map<String, bool>.from(settings['showFields'] ??
+            {
+              'vietnamese': true,
+              'english': true,
+              'jpKanji': true,
+              'jpReading': true,
+              'jpType': true,
+              'jpDetailType': true,
+              'jpLevel': true,
+              'enIpa': true,
+              'enLevel': true,
+              'hanViet': true,
+              'cnCharacter': true,
+              'cnPinyin': true,
+              'cnLevel': true,
+              'exampleSentence': true,
+              'contextNote': true,
+            });
+
+    final List<Map<String, String>> sortOptions = [
+      {'key': 'id', 'label': '🔢 ID'},
+      {'key': 'created_at', 'label': '📅 Created Date'},
+      {'key': 'vietnamese', 'label': '🇻🇳 Vietnamese'},
+      {'key': 'english', 'label': '🇬🇧 English'},
+      {'key': 'jp_level', 'label': '📊 JLPT Level'},
+      {'key': 'en_level', 'label': '📊 CEFR Level'},
+      {'key': 'cn_level', 'label': '📊 HSK Level'},
+      {'key': 'jp_detail_type', 'label': '📋 Word Type'},
+    ];
+
+    final List<Map<String, String>> fieldOptions = [
+      {'key': 'vietnamese', 'label': '🇻🇳 Vietnamese', 'required': 'true'},
+      {'key': 'english', 'label': '🇬🇧 English', 'required': 'false'},
+      {'key': 'jpKanji', 'label': '🇯🇵 Japanese Kanji', 'required': 'false'},
+      {'key': 'jpReading', 'label': '🔊 Japanese Reading', 'required': 'false'},
+      {'key': 'jpType', 'label': '📝 Japanese Type', 'required': 'false'},
+      {
+        'key': 'jpDetailType',
+        'label': '📋 Word Detail Type',
+        'required': 'false'
+      },
+      {'key': 'jpLevel', 'label': '📊 JLPT Level', 'required': 'false'},
+      {'key': 'enIpa', 'label': '🔊 English IPA', 'required': 'false'},
+      {'key': 'enLevel', 'label': '📊 CEFR Level', 'required': 'false'},
+      {'key': 'hanViet', 'label': '🇻🇳 Han-Viet', 'required': 'false'},
+      {
+        'key': 'cnCharacter',
+        'label': '🇨🇳 Chinese Character',
+        'required': 'false'
+      },
+      {'key': 'cnPinyin', 'label': '🔊 Chinese Pinyin', 'required': 'false'},
+      {'key': 'cnLevel', 'label': '📊 HSK Level', 'required': 'false'},
+      {
+        'key': 'exampleSentence',
+        'label': '💬 Example Sentence',
+        'required': 'false'
+      },
+      {'key': 'contextNote', 'label': '📌 Context Note', 'required': 'false'},
+    ];
+
+    return StatefulBuilder(
+      builder: (context, setState) {
+        return SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Items per page
+              const Text('Items per page:',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                children: [25, 50, 100, 200, 500].map((size) {
+                  return ChoiceChip(
+                    label: Text('$size'),
+                    selected: itemsPerPage == size,
+                    onSelected: (selected) {
+                      setState(() {
+                        itemsPerPage = size;
+                      });
+                      final newSettings = Map<String, dynamic>.from(settings);
+                      newSettings['itemsPerPage'] = size;
+                      ref.read(settingsProvider.notifier).state = newSettings;
+                      _itemsPerPage = size;
+                      _pageSize = size;
+                    },
+                  );
+                }).toList(),
+              ),
+
+              const SizedBox(height: 16),
+              const Divider(),
+
+              // Sort by
+              const Text('Sort By:',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              const SizedBox(height: 8),
+              ...sortOptions.map((option) {
+                return RadioListTile<String>(
+                  title: Text(option['label']!),
+                  value: option['key']!,
+                  groupValue: sortBy,
+                  onChanged: (value) {
+                    setState(() {
+                      sortBy = value!;
+                    });
+                    final newSettings = Map<String, dynamic>.from(settings);
+                    newSettings['sortBy'] = value;
+                    ref.read(settingsProvider.notifier).state = newSettings;
+                    _sortBy = value!;
+                  },
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                );
+              }).toList(),
+
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  const Text('Order:'),
+                  const SizedBox(width: 16),
+                  ChoiceChip(
+                    label: const Text('Ascending'),
+                    selected: sortAscending,
+                    onSelected: (selected) {
+                      setState(() {
+                        sortAscending = true;
+                      });
+                      final newSettings = Map<String, dynamic>.from(settings);
+                      newSettings['sortAscending'] = true;
+                      ref.read(settingsProvider.notifier).state = newSettings;
+                      _sortAscending = true;
+                    },
+                  ),
+                  const SizedBox(width: 8),
+                  ChoiceChip(
+                    label: const Text('Descending'),
+                    selected: !sortAscending,
+                    onSelected: (selected) {
+                      setState(() {
+                        sortAscending = false;
+                      });
+                      final newSettings = Map<String, dynamic>.from(settings);
+                      newSettings['sortAscending'] = false;
+                      ref.read(settingsProvider.notifier).state = newSettings;
+                      _sortAscending = false;
+                    },
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 16),
+              const Divider(),
+
+              // Show/Hide Fields
+              const Text('Show/Hide Fields:',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              const SizedBox(height: 8),
+              ...fieldOptions.map((field) {
+                final key = field['key']!;
+                final label = field['label']!;
+                final isRequired = field['required'] == 'true';
+                final isChecked = showFields[key] ?? true;
+
+                return CheckboxListTile(
+                  title: Text(label),
+                  value: isChecked,
+                  onChanged: isRequired
+                      ? null
+                      : (checked) {
+                          setState(() {
+                            showFields[key] = checked ?? true;
+                          });
+                          final newSettings =
+                              Map<String, dynamic>.from(settings);
+                          newSettings['showFields'] =
+                              Map<String, bool>.from(showFields);
+                          ref.read(settingsProvider.notifier).state =
+                              newSettings;
+                          _showFields = Map<String, bool>.from(showFields);
+                        },
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  secondary: isRequired
+                      ? const Icon(Icons.lock, size: 16, color: Colors.grey)
+                      : null,
+                );
+              }).toList(),
+
+              const SizedBox(height: 16),
+
+              // Apply button
+              Center(
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    _saveSettingsState();
+                    setState(() {
+                      _currentPage = 0;
+                      _totalItems = 0;
+                    });
+                    _loadFlashcardsWithFilter();
+                    Navigator.pop(context);
+
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('✅ Display settings applied'),
+                        backgroundColor: Colors.green,
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.check),
+                  label: const Text('Apply'),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildThemeSettingsTab(BuildContext context) {
+    final themeMode = ref.watch(themeModeProvider);
+    final themeColor = ref.watch(themeColorProvider);
+
+    final colorOptions = [
+      {'color': Colors.deepPurple, 'label': 'Deep Purple'},
+      {'color': Colors.blue, 'label': 'Blue'},
+      {'color': Colors.indigo, 'label': 'Indigo'},
+      {'color': Colors.purple, 'label': 'Purple'},
+      {'color': Colors.pink, 'label': 'Pink'},
+      {'color': Colors.red, 'label': 'Red'},
+      {'color': Colors.orange, 'label': 'Orange'},
+      {'color': Colors.amber, 'label': 'Amber'},
+      {'color': Colors.green, 'label': 'Green'},
+      {'color': Colors.teal, 'label': 'Teal'},
+      {'color': Colors.cyan, 'label': 'Cyan'},
+      {'color': Colors.brown, 'label': 'Brown'},
+    ];
+
+    return StatefulBuilder(
+      builder: (context, setState) {
+        return SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Theme Mode
+              const Text('Theme Mode:',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              const SizedBox(height: 12),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _buildThemeModeButton(
+                    icon: Icons.light_mode,
+                    label: 'Light',
+                    isSelected: themeMode == ThemeMode.light,
+                    onTap: () {
+                      ref.read(themeModeProvider.notifier).state =
+                          ThemeMode.light;
+                      _saveThemeMode(ThemeMode.light);
+                      setState(() {});
+                    },
+                  ),
+                  _buildThemeModeButton(
+                    icon: Icons.dark_mode,
+                    label: 'Dark',
+                    isSelected: themeMode == ThemeMode.dark,
+                    onTap: () {
+                      ref.read(themeModeProvider.notifier).state =
+                          ThemeMode.dark;
+                      _saveThemeMode(ThemeMode.dark);
+                      setState(() {});
+                    },
+                  ),
+                  _buildThemeModeButton(
+                    icon: Icons.brightness_auto,
+                    label: 'System',
+                    isSelected: themeMode == ThemeMode.system,
+                    onTap: () {
+                      ref.read(themeModeProvider.notifier).state =
+                          ThemeMode.system;
+                      _saveThemeMode(ThemeMode.system);
+                      setState(() {});
+                    },
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 24),
+              const Divider(),
+
+              // Theme Color
+              const Text('Theme Color:',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: colorOptions.map((option) {
+                  final color = option['color'] as Color;
+                  final isSelected = themeColor == color;
+
+                  return GestureDetector(
+                    onTap: () {
+                      ref.read(themeColorProvider.notifier).state = color;
+                      _saveThemeColor(color);
+                      setState(() {});
+                    },
+                    child: Container(
+                      width: 60,
+                      height: 60,
+                      decoration: BoxDecoration(
+                        color: color,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: isSelected ? Colors.white : Colors.transparent,
+                          width: 4,
+                        ),
+                        boxShadow: isSelected
+                            ? [
+                                BoxShadow(
+                                  color: color.withOpacity(0.5),
+                                  blurRadius: 12,
+                                  spreadRadius: 2,
+                                ),
+                              ]
+                            : [],
+                      ),
+                      child: isSelected
+                          ? const Icon(Icons.check,
+                              color: Colors.white, size: 28)
+                          : null,
+                    ),
+                  );
+                }).toList(),
+              ),
+
+              const SizedBox(height: 24),
+
+              // Preview
+              const Text('Preview:',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: themeMode == ThemeMode.dark
+                      ? Colors.grey[900]
+                      : Colors.grey[100],
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: themeColor.withOpacity(0.5),
+                    width: 2,
+                  ),
+                ),
+                child: Column(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: themeColor,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Text(
+                        'Sample Card',
+                        style: TextStyle(
+                            color: Colors.white, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      'This is how your theme looks',
+                      style: TextStyle(
+                        color: themeMode == ThemeMode.dark
+                            ? Colors.white
+                            : Colors.black87,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+// Helper widget cho theme mode
+  Widget _buildThemeModeButton({
+    required IconData icon,
+    required String label,
+    required bool isSelected,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? Theme.of(context).primaryColor.withOpacity(0.2)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isSelected
+                ? Theme.of(context).primaryColor
+                : Colors.grey.shade300,
+            width: 2,
+          ),
+        ),
+        child: Column(
+          children: [
+            Icon(
+              icon,
+              size: 32,
+              color: isSelected ? Theme.of(context).primaryColor : Colors.grey,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                color:
+                    isSelected ? Theme.of(context).primaryColor : Colors.grey,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+// Save theme functions
+  Future<void> _saveThemeMode(ThemeMode mode) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt('theme_mode', mode.index);
+    } catch (e) {
+      print('❌ Error saving theme mode: $e');
+    }
+  }
+
+  Future<void> _saveThemeColor(Color color) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt('theme_color', color.value);
+    } catch (e) {
+      print('❌ Error saving theme color: $e');
+    }
+  }
+
+  void _showUnifiedSettings(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return Dialog(
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          child: Container(
+            width: MediaQuery.of(context).size.width * 0.9,
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(context).size.height * 0.85,
+            ),
+            padding: const EdgeInsets.all(16),
+            child: DefaultTabController(
+              length: 2,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Header
+                  Row(
+                    children: [
+                      Icon(Icons.settings,
+                          color: Theme.of(context).primaryColor),
+                      const SizedBox(width: 8),
+                      const Text(
+                        'Settings',
+                        style: TextStyle(
+                            fontSize: 20, fontWeight: FontWeight.bold),
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                    ],
+                  ),
+                  const Divider(),
+
+                  // Tabs
+                  const TabBar(
+                    tabs: [
+                      Tab(icon: Icon(Icons.display_settings), text: 'Display'),
+                      Tab(icon: Icon(Icons.palette), text: 'Theme'),
+                    ],
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // Tab Content
+                  Expanded(
+                    child: TabBarView(
+                      children: [
+                        _buildDisplaySettingsTab(context),
+                        _buildThemeSettingsTab(context),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 }
