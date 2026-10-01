@@ -4234,8 +4234,6 @@ class _StudyPageState extends ConsumerState<StudyPage> {
         case 'easy':
           quality = 5;
           break;
-        default:
-          quality = 3;
       }
 
       // Tính toán interval và ease factor
@@ -4354,9 +4352,13 @@ class _StudyPageState extends ConsumerState<StudyPage> {
   }
 
   String _getStudyStatusFromQuality(double quality) {
-    if (quality >= 4) return 'mastered';
+    // easy (5) -> mastered
+    if (quality >= 5) return 'mastered';
+    // good (3) -> reviewing
     if (quality >= 3) return 'reviewing';
-    if (quality >= 2) return 'learning';
+    // hard (1) -> learning
+    if (quality >= 1) return 'learning';
+    // again (0) -> new
     return 'new';
   }
 
