@@ -44,16 +44,21 @@ class FlashcardCard extends StatelessWidget {
                     children: [
                       // Badge cho biết nguồn dữ liệu
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 4),
                         decoration: BoxDecoration(
-                          color: isReadOnly ? Colors.blue.shade100 : Colors.green.shade100,
+                          color: isReadOnly
+                              ? Colors.blue.shade100
+                              : Colors.green.shade100,
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: Text(
                           isReadOnly ? '📡 Server' : '💾 Local',
                           style: TextStyle(
                             fontSize: 10,
-                            color: isReadOnly ? Colors.blue.shade800 : Colors.green.shade800,
+                            color: isReadOnly
+                                ? Colors.blue.shade800
+                                : Colors.green.shade800,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
@@ -92,7 +97,7 @@ class FlashcardCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 8),
-            
+
             // English
             if (card.english != null && _shouldShow('english'))
               Padding(
@@ -102,7 +107,7 @@ class FlashcardCard extends StatelessWidget {
                   style: const TextStyle(fontSize: 16),
                 ),
               ),
-            
+
             // Japanese Kanji
             if (card.jpKanji != null && _shouldShow('jpKanji'))
               Padding(
@@ -117,12 +122,13 @@ class FlashcardCard extends StatelessWidget {
                     if (card.jpReading != null && _shouldShow('jpReading'))
                       Text(
                         '  (${card.jpReading})',
-                        style: const TextStyle(fontSize: 14, color: Colors.grey),
+                        style:
+                            const TextStyle(fontSize: 14, color: Colors.grey),
                       ),
                   ],
                 ),
               ),
-            
+
             // Han Viet
             if (card.hanViet != null && _shouldShow('hanViet'))
               Padding(
@@ -132,7 +138,7 @@ class FlashcardCard extends StatelessWidget {
                   style: const TextStyle(fontSize: 16),
                 ),
               ),
-            
+
             // Chinese Character
             if (card.cnCharacter != null && _shouldShow('cnCharacter'))
               Padding(
@@ -147,18 +153,20 @@ class FlashcardCard extends StatelessWidget {
                     if (card.cnPinyin != null && _shouldShow('cnPinyin'))
                       Text(
                         '  (${card.cnPinyin})',
-                        style: const TextStyle(fontSize: 14, color: Colors.grey),
+                        style:
+                            const TextStyle(fontSize: 14, color: Colors.grey),
                       ),
                   ],
                 ),
               ),
-            
+
             // Word Type
             if (card.jpDetailType != null && _shouldShow('jpDetailType'))
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 2),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(
                     color: Colors.purple.shade50,
                     borderRadius: BorderRadius.circular(4),
@@ -172,10 +180,10 @@ class FlashcardCard extends StatelessWidget {
                   ),
                 ),
               ),
-            
+
             // Levels
-            if ((card.jpLevel != null && _shouldShow('jpLevel')) || 
-                (card.enLevel != null && _shouldShow('enLevel')) || 
+            if ((card.jpLevel != null && _shouldShow('jpLevel')) ||
+                (card.enLevel != null && _shouldShow('enLevel')) ||
                 (card.cnLevel != null && _shouldShow('cnLevel')))
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 4),
@@ -200,7 +208,7 @@ class FlashcardCard extends StatelessWidget {
                   ],
                 ),
               ),
-            
+
             // Example Sentence
             if (card.exampleSentence != null && _shouldShow('exampleSentence'))
               Padding(
@@ -213,11 +221,12 @@ class FlashcardCard extends StatelessWidget {
                   ),
                   child: Text(
                     '💬 ${card.exampleSentence}',
-                    style: const TextStyle(fontSize: 14, fontStyle: FontStyle.italic),
+                    style: const TextStyle(
+                        fontSize: 14, fontStyle: FontStyle.italic),
                   ),
                 ),
               ),
-            
+
             // Context Note
             if (card.contextNote != null && _shouldShow('contextNote'))
               Padding(
@@ -248,7 +257,7 @@ class FlashcardCard extends StatelessWidget {
       'reviewing': Colors.blue,
       'mastered': Colors.green,
     };
-    
+
     final statusIcons = {
       'new': Icons.fiber_new,
       'learning': Icons.school,
@@ -265,43 +274,59 @@ class FlashcardCard extends StatelessWidget {
       'mastered': '⭐ Mastered',
     };
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 4),
-      decoration: BoxDecoration(
-        color: statusColors[currentStatus]?.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: statusColors[currentStatus] ?? Colors.grey,
-          width: 1,
-        ),
-      ),
-      child: DropdownButton<String>(
-        value: currentStatus,
-        underline: const SizedBox(),
-        icon: Icon(
-          statusIcons[currentStatus],
-          size: 16,
-          color: statusColors[currentStatus],
-        ),
-        style: TextStyle(
-          fontSize: 12,
-          color: statusColors[currentStatus],
-        ),
-        items: statusList.map((status) {
-          return DropdownMenuItem(
-            value: status,
-            child: Text(
-              statusLabels[status] ?? status,
-              style: const TextStyle(fontSize: 12),
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          decoration: BoxDecoration(
+            color: statusColors[currentStatus]?.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: statusColors[currentStatus] ?? Colors.grey,
+              width: 1,
             ),
-          );
-        }).toList(),
-        onChanged: (newStatus) {
-          if (newStatus != null) {
-            onStatusChange?.call(newStatus);
-          }
-        },
-      ),
+          ),
+          child: DropdownButton<String>(
+            value: currentStatus,
+            underline: const SizedBox(),
+            icon: Icon(
+              statusIcons[currentStatus],
+              size: 16,
+              color: statusColors[currentStatus],
+            ),
+            style: TextStyle(
+              fontSize: 12,
+              color: statusColors[currentStatus],
+            ),
+            items: statusList.map((status) {
+              return DropdownMenuItem(
+                value: status,
+                child: Text(
+                  statusLabels[status] ?? status,
+                  style: const TextStyle(fontSize: 12),
+                ),
+              );
+            }).toList(),
+            onChanged: (newStatus) {
+              if (newStatus != null && newStatus != currentStatus) {
+                onStatusChange?.call(newStatus);
+              }
+            },
+          ),
+        ),
+        // Nút reset nhỏ (chỉ hiện khi đã mastered/reviewing)
+        if (currentStatus == 'mastered' || currentStatus == 'reviewing')
+          IconButton(
+            icon: const Icon(Icons.restart_alt, color: Colors.orange, size: 18),
+            tooltip: 'Reset to New',
+            onPressed: () {
+              onStatusChange?.call('new'); // Gọi callback với 'new'
+            },
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+          ),
+      ],
     );
   }
 }

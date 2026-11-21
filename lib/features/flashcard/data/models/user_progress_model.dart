@@ -1,13 +1,18 @@
 class UserProgress {
   final String id;
   final String userId;
-  final int flashcardId; // bigint trong Supabase
+  final int flashcardId;
   final String studyStatus;
   final int srsInterval;
   final double srsEaseFactor;
   final DateTime? srsNextReview;
   final DateTime? updatedAt;
   final DateTime? createdAt;
+
+  /// Khi user chủ động hạ cấp (vd: mastered → learning),
+  /// field này = thời điểm hạ cấp. Sync sẽ ưu tiên local nếu
+  /// forceDowngradeAt > remote.updatedAt.
+  final DateTime? forceDowngradeAt;
 
   UserProgress({
     required this.id,
@@ -19,17 +24,14 @@ class UserProgress {
     this.srsNextReview,
     this.updatedAt,
     this.createdAt,
+    this.forceDowngradeAt,
   });
 
-  /// Parse flashcard_id an toàn: chấp nhận int, numeric string, hoặc local id
   static int _parseFlashcardId(dynamic value) {
     if (value == null) return 0;
     if (value is int) return value;
     if (value is num) return value.toInt();
-    if (value is String) {
-      // Chỉ parse được nếu là số thuần
-      return int.tryParse(value) ?? 0;
-    }
+    if (value is String) return int.tryParse(value) ?? 0;
     return 0;
   }
 
@@ -50,6 +52,9 @@ class UserProgress {
       createdAt: json['created_at'] != null
           ? DateTime.tryParse(json['created_at'].toString())
           : null,
+      forceDowngradeAt: json['force_downgrade_at'] != null
+          ? DateTime.tryParse(json['force_downgrade_at'].toString())
+          : null,
     );
   }
 
@@ -64,10 +69,10 @@ class UserProgress {
       'srs_next_review': srsNextReview?.toIso8601String(),
       'updated_at': updatedAt?.toIso8601String(),
       'created_at': createdAt?.toIso8601String(),
+      'force_downgrade_at': forceDowngradeAt?.toIso8601String(),
     };
   }
 
-  /// Chỉ gửi lên Supabase những field cần thiết
   Map<String, dynamic> toSupabaseJson({required String userId}) {
     return {
       'user_id': userId,
@@ -75,8 +80,9 @@ class UserProgress {
       'study_status': studyStatus,
       'srs_interval': srsInterval,
       'srs_ease_factor': srsEaseFactor,
-      'srs_next_review': srsNextReview?.toIso8601String(),
-      'updated_at': DateTime.now().toUtc().toIso8601String(),
+      'srs_next_review': srsNextReview?.toUtc().toIso8601String(),
+      'updated_at': (updatedAt ?? DateTime.now()).toUtc().toIso8601String(),
+      'force_downgrade_at': forceDowngradeAt?.toUtc().toIso8601String(),
     };
   }
 
@@ -90,6 +96,8 @@ class UserProgress {
     DateTime? srsNextReview,
     DateTime? updatedAt,
     DateTime? createdAt,
+    DateTime? forceDowngradeAt,
+    bool clearForceDowngrade = false,
   }) {
     return UserProgress(
       id: id ?? this.id,
@@ -101,6 +109,9 @@ class UserProgress {
       srsNextReview: srsNextReview ?? this.srsNextReview,
       updatedAt: updatedAt ?? this.updatedAt,
       createdAt: createdAt ?? this.createdAt,
+      forceDowngradeAt: clearForceDowngrade
+          ? null
+          : (forceDowngradeAt ?? this.forceDowngradeAt),
     );
   }
 }

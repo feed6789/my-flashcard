@@ -163,7 +163,8 @@ class FlashcardListPage extends ConsumerStatefulWidget {
   ConsumerState<FlashcardListPage> createState() => _FlashcardListPageState();
 }
 
-class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
+class _FlashcardListPageState extends ConsumerState<FlashcardListPage>
+    with WidgetsBindingObserver {
   // Controllers
   final _formKey = GlobalKey<FormState>();
   final _searchController = TextEditingController();
@@ -201,6 +202,15 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
   String _sortBy = 'id';
   bool _sortAscending = true;
 
+  static const Map<String, int> _statusRankMap = {
+    'new': 0,
+    'learning': 1,
+    'reviewing': 2,
+    'mastered': 3,
+  };
+
+  int _statusRankOf(String? status) => _statusRankMap[status] ?? 0;
+
   final _topicController = TextEditingController();
 
   // Provider để chia sẻ danh sách flashcards đã lọc
@@ -236,9 +246,11 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
   };
 
   @override
+  @override
   void initState() {
     super.initState();
 
+    WidgetsBinding.instance.addObserver(this);
     _searchController.addListener(() {
       if (_searchController.text.isNotEmpty) {
         _performSearch(_searchController.text, _searchField);
@@ -252,8 +264,18 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
     _loadSettings();
 
     // Load dữ liệu ban đầu
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _loadFlashcardsWithFilter();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _loadFlashcardsWithFilter();
+
+      // ⭐ Auto-sync nếu đã login
+      if (SupabaseConfig.isAuthenticated) {
+        print('🔄 Auto-sync on app open (user already logged in)');
+        // Đợi load xong mới sync, tránh tranh chấp
+        await Future.delayed(const Duration(milliseconds: 500));
+        if (mounted) {
+          _syncStudyStatus();
+        }
+      }
     });
   }
 
@@ -391,7 +413,28 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
     _cnLevelController.dispose();
     _exampleSentenceController.dispose();
     _contextNoteController.dispose();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  DateTime? _lastResumeSync;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+
+    if (state == AppLifecycleState.resumed) {
+      if (SupabaseConfig.isAuthenticated) {
+        // Tránh sync quá dày (chỉ sync nếu > 30 giây kể từ lần trước)
+        final now = DateTime.now();
+        if (_lastResumeSync == null ||
+            now.difference(_lastResumeSync!).inSeconds > 30) {
+          _lastResumeSync = now;
+          print('🔄 App resumed → sync progress');
+          _syncStudyStatus();
+        }
+      }
+    }
   }
 
   void _onScroll() {
@@ -523,18 +566,23 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
 
   Future<void> _updateStudyStatus(String cardId, String newStatus) async {
     try {
-      print('🔄 Updating status for card $cardId to $newStatus');
-
       final localDb = LocalDatabase();
-
-      // ========== BƯỚC 1: Cập nhật bảng flashcards (local) ==========
       final cards = await localDb.getAllFlashcards();
       final cardIndex = cards.indexWhere((c) => c.id == cardId);
+      if (cardIndex == -1) return;
 
-      if (cardIndex == -1) {
-        print('❌ Card not found in database: $cardId');
-        return;
+      final oldStatus = cards[cardIndex].studyStatus ?? 'new';
+      final oldRank = _statusRankOf(oldStatus);
+      final newRank = _statusRankOf(newStatus);
+
+      // Nếu là downgrade (rank giảm) → gọi _forceDowngradeStatus
+      if (newRank < oldRank) {
+        print('🔽 Detected downgrade: $oldStatus → $newStatus');
+        return _forceDowngradeStatus(cardId, newStatus);
       }
+
+      // Ngược lại → update bình thường
+      print('🔄 Updating status for card $cardId to $newStatus');
 
       final oldCard = cards[cardIndex];
       final updatedCard = oldCard.copyWith(studyStatus: newStatus);
@@ -612,6 +660,91 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('❌ Failed to update status'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  /// Hạ cấp status (chủ động) - dùng khi user muốn reset card
+  Future<void> _forceDowngradeStatus(String cardId, String newStatus) async {
+    try {
+      print('🔽 Force downgrading card $cardId to $newStatus');
+
+      final localDb = LocalDatabase();
+      final cards = await localDb.getAllFlashcards();
+      final cardIndex = cards.indexWhere((c) => c.id == cardId);
+
+      if (cardIndex == -1) {
+        print('❌ Card not found: $cardId');
+        return;
+      }
+
+      final oldCard = cards[cardIndex];
+      final updatedCard = oldCard.copyWith(studyStatus: newStatus);
+      await localDb.updateFlashcard(updatedCard);
+
+      final flashcardIdInt = int.tryParse(cardId);
+      if (flashcardIdInt != null && flashcardIdInt > 0) {
+        final now = DateTime.now().toUtc();
+        final existing = await localDb.getUserProgressByFlashcardId(cardId);
+
+        final progress = UserProgress(
+          id: existing?.id ?? '',
+          userId: SupabaseConfig.currentUserId ?? '',
+          flashcardId: flashcardIdInt,
+          studyStatus: newStatus,
+          srsInterval: 1, // Reset interval
+          srsEaseFactor: 2.5, // Reset ease
+          srsNextReview: now, // Ôn ngay
+          updatedAt: now,
+          createdAt: existing?.createdAt ?? now,
+          forceDowngradeAt: now, // ⭐ Đánh dấu force downgrade
+        );
+
+        if (existing == null) {
+          await localDb.insertUserProgress(progress);
+        } else {
+          await localDb.updateUserProgress(progress);
+        }
+
+        if (SupabaseConfig.isAuthenticated) {
+          try {
+            await SyncService().pushOne(progress);
+          } catch (e) {
+            print('⚠️ Push failed: $e');
+          }
+        }
+      }
+
+      // Refresh UI
+      final notifier = ref.read(localFlashcardsProvider.notifier);
+      final currentCards = notifier.state;
+      final uiIndex = currentCards.indexWhere((c) => c.id == cardId);
+      if (uiIndex != -1) {
+        final newList = [...currentCards];
+        newList[uiIndex] = updatedCard;
+        notifier.state = newList;
+      }
+
+      if (mounted) {
+        setState(() {});
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+                '🔽 Reset to ${_getStatusLabel(newStatus)} (will sync to all devices)'),
+            backgroundColor: Colors.orange,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      print('❌ Error force downgrading: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('❌ Failed to downgrade status'),
             backgroundColor: Colors.red,
           ),
         );

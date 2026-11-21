@@ -11,8 +11,7 @@ class SyncService {
   final _localDb = LocalDatabase();
   final _remoteSource = UserProgressSource();
 
-  /// Thứ bậc trạng thái học: new < learning < reviewing < mastered
-  /// Số càng lớn = càng "cao cấp", không thể bị đè bởi số nhỏ hơn.
+  /// Thứ bậc: new < learning < reviewing < mastered
   static const Map<String, int> _statusRank = {
     'new': 0,
     'learning': 1,
@@ -25,51 +24,68 @@ class SyncService {
     return _statusRank[status] ?? 0;
   }
 
-  /// Quyết định giữa local và remote, trả về:
-  /// - `UserProgress` được chọn (có thể là local hoặc remote)
-  /// - `bool isLocalWin` = true nếu local thắng (cần push)
+  /// Resolve conflict giữa local và remote.
   ///
-  /// Quy tắc:
-  /// 1. So sánh rank trước:
-  ///    - rank khác nhau → rank cao hơn thắng (bất kể thời gian)
-  /// 2. Nếu rank bằng nhau → so `updated_at`:
-  ///    - cái nào mới hơn thắng
-  /// 3. Nếu cùng rank + cùng thời gian (hoặc null) → giữ local (không push)
-  ({UserProgress winner, bool isLocalWin}) _resolveConflict(
+  /// Thứ tự ưu tiên:
+  /// 1. Nếu LOCAL có `forceDowngradeAt` MỚI HƠN `remote.updatedAt`
+  ///    → LOCAL thắng tuyệt đối (user chủ động hạ cấp)
+  /// 2. Nếu REMOTE có `forceDowngradeAt` MỚI HƠN `local.updatedAt`
+  ///    → REMOTE thắng tuyệt đối
+  /// 3. So sánh rank (new < learning < reviewing < mastered)
+  ///    - rank cao hơn thắng
+  /// 4. Cùng rank → so `updated_at`, cái mới hơn thắng
+  /// 5. Bằng nhau → giữ local (không push)
+  ({UserProgress winner, bool isLocalWin, String reason}) _resolveConflict(
     UserProgress local,
     UserProgress remote,
   ) {
-    final localRank = _rankOf(local.studyStatus);
-    final remoteRank = _rankOf(remote.studyStatus);
-
-    // 1. Ưu tiên theo rank
-    if (localRank > remoteRank) {
-      return (winner: local, isLocalWin: true);
-    }
-    if (remoteRank > localRank) {
-      return (winner: remote, isLocalWin: false);
-    }
-
-    // 2. Cùng rank → xét updated_at
     final localTime = local.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
     final remoteTime =
         remote.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
 
+    // 1. LOCAL force downgrade mới hơn remote.updated_at
+    if (local.forceDowngradeAt != null &&
+        local.forceDowngradeAt!.isAfter(remoteTime)) {
+      return (
+        winner: local,
+        isLocalWin: true,
+        reason: 'local_force_downgrade',
+      );
+    }
+
+    // 2. REMOTE force downgrade mới hơn local.updated_at
+    if (remote.forceDowngradeAt != null &&
+        remote.forceDowngradeAt!.isAfter(localTime)) {
+      return (
+        winner: remote,
+        isLocalWin: false,
+        reason: 'remote_force_downgrade',
+      );
+    }
+
+    // 3. So sánh rank
+    final localRank = _rankOf(local.studyStatus);
+    final remoteRank = _rankOf(remote.studyStatus);
+
+    if (localRank > remoteRank) {
+      return (winner: local, isLocalWin: true, reason: 'local_higher_rank');
+    }
+    if (remoteRank > localRank) {
+      return (winner: remote, isLocalWin: false, reason: 'remote_higher_rank');
+    }
+
+    // 4. Cùng rank → so updated_at
     if (localTime.isAfter(remoteTime)) {
-      return (winner: local, isLocalWin: true);
+      return (winner: local, isLocalWin: true, reason: 'local_newer');
     }
     if (remoteTime.isAfter(localTime)) {
-      return (winner: remote, isLocalWin: false);
+      return (winner: remote, isLocalWin: false, reason: 'remote_newer');
     }
 
-    // 3. Bằng nhau hoàn toàn → không cần làm gì, giữ local
-    return (winner: local, isLocalWin: false);
+    // 5. Bằng nhau
+    return (winner: local, isLocalWin: false, reason: 'equal');
   }
 
-  /// Merge local progress + remote progress.
-  /// - Card chỉ có local → push lên remote (nếu id hợp lệ)
-  /// - Card chỉ có remote → thêm vào local
-  /// - Card có cả 2 → resolveConflict() quyết định
   Future<Map<String, int>> syncProgress() async {
     if (!SupabaseConfig.isAuthenticated) {
       print('⚠️ Skip sync: not authenticated');
@@ -79,109 +95,105 @@ class SyncService {
     try {
       print('🔄 Starting sync progress...');
 
-      // 1. Pull from remote
       final remoteList = await _remoteSource.getUserProgress();
       final remoteMap = <int, UserProgress>{
         for (final p in remoteList) p.flashcardId: p,
       };
 
-      // 2. Local progress
       final localList = await _localDb.getAllUserProgress();
       final localMap = <int, UserProgress>{
         for (final p in localList) p.flashcardId: p,
       };
 
-      // 3. Merge
       final toPush = <UserProgress>[];
       final toSaveLocal = <UserProgress>[];
       final allKeys = {...remoteMap.keys, ...localMap.keys};
 
-      int conflictResolvedByRank = 0;
-      int conflictResolvedByTime = 0;
+      int rankConflicts = 0;
+      int timeConflicts = 0;
+      int forceDowngrades = 0;
 
       for (final key in allKeys) {
         final remote = remoteMap[key];
         final local = localMap[key];
 
         if (local == null && remote != null) {
-          // Chỉ có remote → đưa vào local
           toSaveLocal.add(remote);
         } else if (local != null && remote == null) {
-          // Chỉ có local → đẩy lên remote (nếu id hợp lệ)
-          if (local.flashcardId > 0) {
-            toPush.add(local);
-          }
+          if (local.flashcardId > 0) toPush.add(local);
         } else if (local != null && remote != null) {
-          // Có cả 2 → resolveConflict
           final result = _resolveConflict(local, remote);
 
-          // Log để debug
-          final localRank = _rankOf(local.studyStatus);
-          final remoteRank = _rankOf(remote.studyStatus);
-          if (localRank != remoteRank) {
-            conflictResolvedByRank++;
-            print(
-                '⚖️ Conflict card $key: local=${local.studyStatus}(rank=$localRank) '
-                'vs remote=${remote.studyStatus}(rank=$remoteRank) '
-                '→ winner=${result.winner.studyStatus}');
-          } else if (result.winner.studyStatus != local.studyStatus ||
-              result.winner.studyStatus != remote.studyStatus) {
-            conflictResolvedByTime++;
-            print('⏰ Conflict card $key: same rank, decided by updated_at '
-                '→ winner=${result.winner.studyStatus}');
+          switch (result.reason) {
+            case 'local_force_downgrade':
+            case 'remote_force_downgrade':
+              forceDowngrades++;
+              print(
+                  '🔽 Force downgrade card $key: ${result.reason} → ${result.winner.studyStatus}');
+              break;
+            case 'local_higher_rank':
+            case 'remote_higher_rank':
+              rankConflicts++;
+              print('⚖️ Rank conflict card $key: local=${local.studyStatus} '
+                  'vs remote=${remote.studyStatus} → ${result.winner.studyStatus}');
+              break;
+            case 'local_newer':
+            case 'remote_newer':
+              timeConflicts++;
+              break;
           }
 
           if (result.isLocalWin) {
-            // Local thắng → push lên remote + giữ local
             if (local.flashcardId > 0) {
-              toPush.add(result.winner);
+              // Khi push, clear force_downgrade_at (đã xử lý xong)
+              final pushProgress = result.winner.copyWith(
+                clearForceDowngrade: true,
+                updatedAt: DateTime.now().toUtc(),
+              );
+              toPush.add(pushProgress);
+
+              // Đồng thời cập nhật local (clear force flag)
+              await _localDb.insertUserProgress(pushProgress);
             }
           } else {
-            // Remote thắng → ghi đè local
-            // Nhưng chỉ ghi nếu khác biệt thực sự
             final sameStatus = local.studyStatus == remote.studyStatus;
             final sameInterval = local.srsInterval == remote.srsInterval;
             final sameEase =
                 (local.srsEaseFactor - remote.srsEaseFactor).abs() < 0.001;
+            final sameForce = local.forceDowngradeAt == remote.forceDowngradeAt;
 
-            if (!sameStatus || !sameInterval || !sameEase) {
-              toSaveLocal.add(result.winner);
+            if (!sameStatus || !sameInterval || !sameEase || !sameForce) {
+              toSaveLocal.add(remote);
             }
           }
         }
       }
 
-      // 4. Push lên remote
       int pushedCount = 0;
       if (toPush.isNotEmpty) {
         pushedCount = await _remoteSource.upsertMultipleProgress(toPush);
       }
 
-      // 5. Lưu vào local (chỉ những cái remote mới hơn / rank cao hơn)
       for (final p in toSaveLocal) {
-        await _localDb.insertUserProgress(p); // upsert
+        await _localDb.insertUserProgress(p);
       }
 
       print('✅ Sync done: pulled=${toSaveLocal.length}, pushed=$pushedCount, '
-          'rankConflicts=$conflictResolvedByRank, timeConflicts=$conflictResolvedByTime');
-      return {
-        'pulled': toSaveLocal.length,
-        'pushed': pushedCount,
-      };
+          'rankConflicts=$rankConflicts, timeConflicts=$timeConflicts, '
+          'forceDowngrades=$forceDowngrades');
+
+      return {'pulled': toSaveLocal.length, 'pushed': pushedCount};
     } catch (e) {
       print('❌ Sync failed: $e');
       rethrow;
     }
   }
 
-  /// Push một progress duy nhất (dùng khi user đổi status)
-  /// ⚠️ Có thêm logic bảo vệ: không push status thấp hơn status hiện có trên server
   Future<void> pushOne(UserProgress progress) async {
     if (!SupabaseConfig.isAuthenticated) return;
     if (progress.flashcardId <= 0) return;
 
     try {
-      // Kiểm tra status hiện tại trên server trước khi push
       final serverList = await _remoteSource.getUserProgress();
       UserProgress? serverProgress;
       for (final s in serverList) {
@@ -192,19 +204,37 @@ class SyncService {
       }
 
       if (serverProgress != null) {
-        // Nếu server có rank cao hơn → KHÔNG push (bảo vệ status cao)
         final localRank = _rankOf(progress.studyStatus);
         final serverRank = _rankOf(serverProgress.studyStatus);
 
-        if (serverRank > localRank) {
+        // Cho phép push nếu:
+        // - local rank >= server rank (bình thường)
+        // - HOẶC có force downgrade mới hơn server.updated_at (chủ động hạ cấp)
+        final forceDowngradeNewer = progress.forceDowngradeAt != null &&
+            (serverProgress.updatedAt == null ||
+                progress.forceDowngradeAt!.isAfter(serverProgress.updatedAt!));
+
+        if (serverRank > localRank && !forceDowngradeNewer) {
           print('🛡️ Skip push: server has higher rank '
-              '(${serverProgress.studyStatus} > ${progress.studyStatus}) for card ${progress.flashcardId}');
+              '(${serverProgress.studyStatus} > ${progress.studyStatus})');
           return;
+        }
+
+        if (forceDowngradeNewer) {
+          print(
+              '🔽 Force downgrade accepted: ${serverProgress.studyStatus} → ${progress.studyStatus}');
         }
       }
 
-      await _remoteSource.upsertProgress(progress);
-      print('☁️ Pushed: ${progress.flashcardId} -> ${progress.studyStatus}');
+      // Khi push thành công → clear force flag
+      final toPush = progress.copyWith(
+        clearForceDowngrade: true,
+        updatedAt: DateTime.now().toUtc(),
+      );
+      await _remoteSource.upsertProgress(toPush);
+      await _localDb.insertUserProgress(toPush);
+
+      print('☁️ Pushed: ${toPush.flashcardId} -> ${toPush.studyStatus}');
     } catch (e) {
       print('⚠️ Push one failed (will retry later): $e');
     }
