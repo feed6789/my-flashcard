@@ -24,7 +24,8 @@ class ExcelExportService {
     'cn_pinyin',
     'cn_level',
     'example_sentence',
-    'context_note'
+    'context_note',
+    'topic'
   ];
 
   // Export flashcards ra file Excel
@@ -40,7 +41,7 @@ class ExcelExportService {
         'ID', 'Vietnamese', 'JP_Kanji', 'JP_Reading', 'JP_Type',
         'JP_Detail_Type', 'JP_Level', 'English', 'EN_IPA', 'EN_Level',
         'Han_Viet', 'CN_Character', 'CN_Pinyin', 'CN_Level',
-        'Example_Sentence', 'Context_Note'
+        'Example_Sentence', 'Context_Note', 'Topic'
       ];
 
       sheetObject.appendRow(headers.map((h) => TextCellValue(h)).toList());
@@ -64,6 +65,7 @@ class ExcelExportService {
           TextCellValue(card.cnLevel ?? ''),
           TextCellValue(card.exampleSentence ?? ''),
           TextCellValue(card.contextNote ?? ''),
+          TextCellValue(card.topic ?? ''),
         ]);
       }
 
@@ -123,6 +125,7 @@ class ExcelExportService {
           card.cnLevel ?? '',
           card.exampleSentence ?? '',
           card.contextNote ?? '',
+          card.topic ?? "",
         ];
         // Escape dấu phẩy trong nội dung
         row = row.map((cell) {

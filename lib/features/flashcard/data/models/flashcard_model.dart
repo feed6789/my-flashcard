@@ -15,6 +15,9 @@ class Flashcard {
   final String? cnLevel;
   final String? exampleSentence;
   final String? contextNote;
+  final String? topic; // ⭐ THÊM MỚI
+  
+  // SRS Fields
   final DateTime? nextReview;
   final int? interval;
   final double? easeFactor;
@@ -38,6 +41,7 @@ class Flashcard {
     this.cnLevel,
     this.exampleSentence,
     this.contextNote,
+    this.topic, // ⭐ THÊM MỚI
     this.nextReview,
     this.interval,
     this.easeFactor,
@@ -46,7 +50,7 @@ class Flashcard {
   });
 
   factory Flashcard.fromJson(Map<String, dynamic> json) {
-    // Xử lý ID từ int8 của Supabase
+    // Xử lý ID
     String idValue;
     if (json['id'] is int) {
       idValue = json['id'].toString();
@@ -73,6 +77,7 @@ class Flashcard {
       cnLevel: json['cn_level'],
       exampleSentence: json['example_sentence'],
       contextNote: json['context_note'],
+      topic: json['topic'], // ⭐ THÊM MỚI
       nextReview: json['next_review'] != null 
           ? DateTime.parse(json['next_review']) 
           : null,
@@ -103,6 +108,7 @@ class Flashcard {
       'cn_level': cnLevel,
       'example_sentence': exampleSentence,
       'context_note': contextNote,
+      'topic': topic, // ⭐ THÊM MỚI
       'next_review': nextReview?.toIso8601String(),
       'interval': interval,
       'ease_factor': easeFactor,
@@ -110,7 +116,6 @@ class Flashcard {
     };
   }
 
-  // THÊM PHƯƠNG THỨC copyWith
   Flashcard copyWith({
     String? id,
     String? vietnamese,
@@ -128,6 +133,7 @@ class Flashcard {
     String? cnLevel,
     String? exampleSentence,
     String? contextNote,
+    String? topic, // ⭐ THÊM MỚI
     DateTime? nextReview,
     int? interval,
     double? easeFactor,
@@ -151,6 +157,7 @@ class Flashcard {
       cnLevel: cnLevel ?? this.cnLevel,
       exampleSentence: exampleSentence ?? this.exampleSentence,
       contextNote: contextNote ?? this.contextNote,
+      topic: topic ?? this.topic, // ⭐ THÊM MỚI
       nextReview: nextReview ?? this.nextReview,
       interval: interval ?? this.interval,
       easeFactor: easeFactor ?? this.easeFactor,

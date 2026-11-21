@@ -199,6 +199,8 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
   String _sortBy = 'id';
   bool _sortAscending = true;
 
+  final _topicController = TextEditingController();
+
   // Provider để chia sẻ danh sách flashcards đã lọc
   final filteredFlashcardsProvider =
       StateProvider<List<Flashcard>>((ref) => []);
@@ -1971,6 +1973,7 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
   // Sửa lỗi: Chuyển Map<String, dynamic> đúng cách
   void _showFilterDialog(BuildContext context) {
     final currentFilter = ref.read(filterProvider);
+    final topicFilter = ref.read(filterProvider)['topic'] ?? '';
 
     // Lấy các giá trị filter hiện tại
     Map<String, List<String>> tempFilters = {};
@@ -2361,6 +2364,11 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                     label: 'Chinese Pinyin',
                     hint: 'Enter Pinyin',
                   ),
+                  _buildTextField(
+                    controller: _topicController,
+                    label: 'Topic',
+                    hint: 'Enter topic (e.g., Greetings, Food)',
+                  ),
                 ],
               ),
             ),
@@ -2462,6 +2470,11 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                     controller: _cnPinyinController,
                     label: 'Chinese Pinyin',
                     hint: 'Enter Pinyin',
+                  ),
+                  _buildTextField(
+                    controller: _topicController,
+                    label: 'Topic',
+                    hint: 'Enter topic (e.g., Greetings, Food)',
                   ),
                 ],
               ),

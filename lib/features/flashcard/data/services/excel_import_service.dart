@@ -24,7 +24,8 @@ class ExcelImportService {
     'cn_pinyin',
     'cn_level',
     'example_sentence',
-    'context_note'
+    'context_note',
+    'topic'
   ];
 
   /// Helper function để lấy giá trị từ cell an toàn
@@ -227,7 +228,8 @@ class ExcelImportService {
         'CN_Pinyin',
         'CN_Level',
         'Example_Sentence',
-        'Context_Note'
+        'Context_Note',
+        'Topic'
       ];
 
       // Thêm header row
@@ -443,6 +445,7 @@ class ExcelImportService {
             contextNote: _getValueFromRow(row, 15).isNotEmpty
                 ? _getValueFromRow(row, 15)
                 : null,
+            topic: _getValueFromRow(row, 16).isNotEmpty ? _getValueFromRow(row, 16) : null,
           );
 
           flashcards.add(flashcard);

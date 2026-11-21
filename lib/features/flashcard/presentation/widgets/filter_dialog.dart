@@ -25,13 +25,23 @@ class _FilterDialogState extends ConsumerState<FilterDialog> {
   String selectedSortBy = 'created_at';
   bool sortAscending = false;
   int pageSize = 50;
-  
+  String selectedTopic = '';
+  List<String> availableTopics = [];
+
   List<String> jpDetailTypes = [];
   List<String> studyStatuses = ['', 'new', 'learning', 'reviewing', 'mastered'];
 
   final List<String> jpLevels = ['', 'N1', 'N2', 'N3', 'N4', 'N5'];
   final List<String> enLevels = ['', 'A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
-  final List<String> cnLevels = ['', 'HSK1', 'HSK2', 'HSK3', 'HSK4', 'HSK5', 'HSK6'];
+  final List<String> cnLevels = [
+    '',
+    'HSK1',
+    'HSK2',
+    'HSK3',
+    'HSK4',
+    'HSK5',
+    'HSK6'
+  ];
   final List<String> sortOptions = [
     'created_at',
     'vietnamese',
@@ -73,26 +83,57 @@ class _FilterDialogState extends ConsumerState<FilterDialog> {
     }
   }
 
+  Future<void> _loadTopics() async {
+    try {
+      final localDb = LocalDatabase();
+      final cards = await localDb.getAllFlashcards();
+      final topics = cards
+          .where((c) => c.topic != null && c.topic!.isNotEmpty)
+          .map((c) => c.topic!)
+          .toSet()
+          .toList()
+        ..sort();
+      setState(() {
+        availableTopics = ['', ...topics];
+      });
+    } catch (e) {
+      print('❌ Error loading topics: $e');
+    }
+  }
+
   String _getStatusLabel(String status) {
     switch (status) {
-      case 'new': return '🆕 New';
-      case 'learning': return '📖 Learning';
-      case 'reviewing': return '🔄 Reviewing';
-      case 'mastered': return '⭐ Mastered';
-      default: return 'All';
+      case 'new':
+        return '🆕 New';
+      case 'learning':
+        return '📖 Learning';
+      case 'reviewing':
+        return '🔄 Reviewing';
+      case 'mastered':
+        return '⭐ Mastered';
+      default:
+        return 'All';
     }
   }
 
   String _getSortLabel(String key) {
     switch (key) {
-      case 'created_at': return 'Created Date';
-      case 'vietnamese': return 'Vietnamese';
-      case 'english': return 'English';
-      case 'jp_level': return 'JLPT Level';
-      case 'en_level': return 'CEFR Level';
-      case 'cn_level': return 'HSK Level';
-      case 'jp_detail_type': return 'Word Type';
-      default: return key;
+      case 'created_at':
+        return 'Created Date';
+      case 'vietnamese':
+        return 'Vietnamese';
+      case 'english':
+        return 'English';
+      case 'jp_level':
+        return 'JLPT Level';
+      case 'en_level':
+        return 'CEFR Level';
+      case 'cn_level':
+        return 'HSK Level';
+      case 'jp_detail_type':
+        return 'Word Type';
+      default:
+        return key;
     }
   }
 
@@ -112,55 +153,59 @@ class _FilterDialogState extends ConsumerState<FilterDialog> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // JLPT Filter
-            _buildFilterSection('JLPT Level:', jpLevels, selectedJpLevel, (value) {
+            _buildFilterSection('JLPT Level:', jpLevels, selectedJpLevel,
+                (value) {
               setState(() => selectedJpLevel = value);
             }),
-            
+
             const Divider(),
-            
+
             // CEFR Filter
-            _buildFilterSection('CEFR Level:', enLevels, selectedEnLevel, (value) {
+            _buildFilterSection('CEFR Level:', enLevels, selectedEnLevel,
+                (value) {
               setState(() => selectedEnLevel = value);
             }),
-            
+
             const Divider(),
-            
+
             // HSK Filter
-            _buildFilterSection('HSK Level:', cnLevels, selectedCnLevel, (value) {
+            _buildFilterSection('HSK Level:', cnLevels, selectedCnLevel,
+                (value) {
               setState(() => selectedCnLevel = value);
             }),
-            
+
             const Divider(),
-            
+
             // Word Type Filter
             _buildFilterSection(
-              'Word Type (JP):', 
-              jpDetailTypes, 
-              selectedJpDetailType, 
+              'Word Type (JP):',
+              jpDetailTypes,
+              selectedJpDetailType,
               (value) {
                 setState(() => selectedJpDetailType = value);
               },
               isChip: true,
             ),
-            
+
             const Divider(),
-            
+
             // Study Status Filter
             _buildFilterSection(
-              'Study Status:', 
-              studyStatuses, 
-              selectedStudyStatus, 
+              'Study Status:',
+              studyStatuses,
+              selectedStudyStatus,
               (value) {
                 setState(() => selectedStudyStatus = value);
               },
               isChip: true,
               getLabel: _getStatusLabel,
             ),
-            
+
             const Divider(),
-            
+
             // Sort
-            const Text('Sort By:', style: TextStyle(fontWeight: FontWeight.bold)),
+            const Text('Sort By:',
+                style: TextStyle(fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
             Row(
               children: [
@@ -181,7 +226,9 @@ class _FilterDialogState extends ConsumerState<FilterDialog> {
                 ),
                 const SizedBox(width: 8),
                 IconButton(
-                  icon: Icon(sortAscending ? Icons.arrow_upward : Icons.arrow_downward),
+                  icon: Icon(sortAscending
+                      ? Icons.arrow_upward
+                      : Icons.arrow_downward),
                   onPressed: () {
                     setState(() => sortAscending = !sortAscending);
                   },
@@ -189,11 +236,12 @@ class _FilterDialogState extends ConsumerState<FilterDialog> {
                 ),
               ],
             ),
-            
+
             const Divider(),
-            
+
             // Page Size
-            const Text('Items per page:', style: TextStyle(fontWeight: FontWeight.bold)),
+            const Text('Items per page:',
+                style: TextStyle(fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
             Row(
               children: [
@@ -269,13 +317,30 @@ class _FilterDialogState extends ConsumerState<FilterDialog> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        const Text('📚 Topic:', style: TextStyle(fontWeight: FontWeight.bold)),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          children: availableTopics.map((topic) {
+            return FilterChip(
+              label: Text(topic.isEmpty ? 'All' : topic),
+              selected: selectedTopic == topic,
+              onSelected: (selected) {
+                setState(() {
+                  selectedTopic = selected ? topic : '';
+                });
+              },
+            );
+          }).toList(),
+        ),
         Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),
         isChip
             ? Wrap(
                 spacing: 8,
                 children: options.map((option) {
-                  final displayLabel = getLabel?.call(option) ?? (option.isEmpty ? 'All' : option);
+                  final displayLabel = getLabel?.call(option) ??
+                      (option.isEmpty ? 'All' : option);
                   return FilterChip(
                     label: Text(displayLabel),
                     selected: selected == option,
