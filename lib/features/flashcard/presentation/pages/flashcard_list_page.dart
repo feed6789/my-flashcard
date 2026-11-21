@@ -565,6 +565,11 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage>
   }
 
   Future<void> _updateStudyStatus(String cardId, String newStatus) async {
+    print('🔍 DEBUG _updateStudyStatus:');
+    print('   isAuthenticated = ${SupabaseConfig.isAuthenticated}');
+    print('   currentUser = ${SupabaseConfig.currentUser?.id}');
+    print('   currentUserId = ${SupabaseConfig.currentUserId}');
+    print('   cardId = $cardId, newStatus = $newStatus');
     try {
       final localDb = LocalDatabase();
       final cards = await localDb.getAllFlashcards();
