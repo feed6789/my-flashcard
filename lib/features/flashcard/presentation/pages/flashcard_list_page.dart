@@ -20,6 +20,8 @@ import 'package:flashcard_app/features/study/presentation/pages/study_page.dart'
 import 'package:flashcard_app/core/database/local_database.dart';
 import 'package:flashcard_app/core/providers/auth_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flashcard_app/config/supabase_config.dart';
+import 'package:flashcard_app/features/flashcard/data/services/sync_service.dart';
 
 // ==================== PROVIDERS ====================
 // Settings provider
@@ -68,7 +70,6 @@ final localFlashcardsProvider =
 
 // Filter Provider
 final filterProvider = StateProvider<Map<String, dynamic>>((ref) => {});
-bool _isSyncing = false;
 
 class LocalFlashcardNotifier extends StateNotifier<List<Flashcard>> {
   final FlashcardRepository _repository = FlashcardRepository();
@@ -186,6 +187,7 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
   final ExcelImportService _excelService = ExcelImportService();
   bool _isImporting = false;
   bool _isSearching = false;
+  bool _isSyncing = false;
 
   // Pagination
   int _currentPage = 0;
@@ -524,41 +526,85 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
       print('🔄 Updating status for card $cardId to $newStatus');
 
       final localDb = LocalDatabase();
+
+      // ========== BƯỚC 1: Cập nhật bảng flashcards (local) ==========
       final cards = await localDb.getAllFlashcards();
       final cardIndex = cards.indexWhere((c) => c.id == cardId);
 
-      if (cardIndex != -1) {
-        // Sử dụng copyWith đã được thêm vào model
-        final updatedCard = cards[cardIndex].copyWith(studyStatus: newStatus);
-        await localDb.updateFlashcard(updatedCard);
-        print(
-            '✅ Updated card in database: ${updatedCard.vietnamese} -> $newStatus');
+      if (cardIndex == -1) {
+        print('❌ Card not found in database: $cardId');
+        return;
+      }
 
-        // Cập nhật state
-        final notifier = ref.read(localFlashcardsProvider.notifier);
-        final currentCards = notifier.state;
-        final index = currentCards.indexWhere((c) => c.id == cardId);
-        if (index != -1) {
-          final newList = [...currentCards];
-          newList[index] = updatedCard;
-          notifier.state = newList;
+      final oldCard = cards[cardIndex];
+      final updatedCard = oldCard.copyWith(studyStatus: newStatus);
+      await localDb.updateFlashcard(updatedCard);
+      print(
+          '✅ Updated flashcards_local: ${updatedCard.vietnamese} -> $newStatus');
+
+      // ========== BƯỚC 2: Upsert vào bảng user_progress (local) ==========
+      // Chỉ áp dụng nếu card.id parse được thành int (card từ Supabase)
+      final flashcardIdInt = int.tryParse(cardId);
+
+      if (flashcardIdInt != null && flashcardIdInt > 0) {
+        final now = DateTime.now().toUtc();
+
+        // Kiểm tra đã có progress chưa
+        final existing = await localDb.getUserProgressByFlashcardId(cardId);
+
+        final progress = UserProgress(
+          id: existing?.id ?? '',
+          userId: SupabaseConfig.currentUserId ?? '',
+          flashcardId: flashcardIdInt,
+          studyStatus: newStatus,
+          srsInterval: existing?.srsInterval ?? 1,
+          srsEaseFactor: existing?.srsEaseFactor ?? 2.5,
+          srsNextReview: existing?.srsNextReview,
+          updatedAt: now,
+          createdAt: existing?.createdAt ?? now,
+        );
+
+        if (existing == null) {
+          await localDb.insertUserProgress(progress);
+          print('✅ Inserted user_progress: $flashcardIdInt -> $newStatus');
+        } else {
+          await localDb.updateUserProgress(progress);
+          print('✅ Updated user_progress: $flashcardIdInt -> $newStatus');
         }
 
-        // Cập nhật danh sách hiển thị
-        setState(() {});
-
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content:
-                  Text('✅ Status updated to ${_getStatusLabel(newStatus)}'),
-              backgroundColor: Colors.green,
-              duration: const Duration(seconds: 1),
-            ),
-          );
+        // ========== BƯỚC 3: Push lên Supabase nếu đã login ==========
+        if (SupabaseConfig.isAuthenticated) {
+          try {
+            await SyncService().pushOne(progress);
+            print('☁️ Pushed to Supabase: $flashcardIdInt -> $newStatus');
+          } catch (e) {
+            print('⚠️ Push to Supabase failed (will retry on next sync): $e');
+          }
         }
       } else {
-        print('❌ Card not found in database: $cardId');
+        print('ℹ️ Card "$cardId" is local-only, skip Supabase sync');
+      }
+
+      // ========== BƯỚC 4: Cập nhật UI ==========
+      final notifier = ref.read(localFlashcardsProvider.notifier);
+      final currentCards = notifier.state;
+      final uiIndex = currentCards.indexWhere((c) => c.id == cardId);
+      if (uiIndex != -1) {
+        final newList = [...currentCards];
+        newList[uiIndex] = updatedCard;
+        notifier.state = newList;
+      }
+
+      if (mounted) {
+        setState(() {});
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✅ Status updated to ${_getStatusLabel(newStatus)}'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 1),
+          ),
+        );
       }
     } catch (e) {
       print('❌ Error updating status: $e');
@@ -3038,17 +3084,20 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
                                 ref
                                     .read(authNotifierProvider)
                                     .isAuthenticated) {
-                              // Đóng dialog
                               Navigator.pop(context);
 
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(
                                   content: Text(
-                                      '✅ Login successful! Use "Download" to get data.'),
+                                      '✅ Login successful! Syncing progress...'),
                                   backgroundColor: Colors.green,
-                                  duration: Duration(seconds: 3),
+                                  duration: Duration(seconds: 2),
                                 ),
                               );
+
+                              // 🔄 Sync tự động sau login (auth_provider đã gọi _runSync,
+                              // nhưng gọi lại ở đây để chắc chắn UI refresh)
+                              _syncStudyStatus();
                             } else {
                               setState(() {
                                 isLoading = false;
@@ -3214,84 +3263,25 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
     setState(() => _isSyncing = true);
 
     try {
-      final localDb = LocalDatabase();
-      final progressSource = UserProgressSource();
+      print('🔄 Starting full sync via SyncService...');
 
-      // ========== BƯỚC 1: LẤY PROGRESS LOCAL ==========
-      final localProgress = await localDb.getAllUserProgress();
-      print('📚 Local progress: ${localProgress.length} cards');
+      // Gọi SyncService - đã xử lý toàn bộ merge logic
+      final result = await SyncService().syncProgress();
 
-      // Debug: In ra local progress
-      for (var p in localProgress) {
-        print('📝 Local: ${p.flashcardId} -> ${p.studyStatus}');
-      }
+      final pulled = result['pulled'] ?? 0;
+      final pushed = result['pushed'] ?? 0;
 
-      // ========== BƯỚC 2: UPLOAD LÊN SERVER ==========
-      if (localProgress.isNotEmpty) {
-        print('📤 Uploading ${localProgress.length} progress to server...');
+      print('✅ Sync completed: pulled=$pulled, pushed=$pushed');
 
-        int uploadedCount = 0;
-        for (var progress in localProgress) {
-          try {
-            final result = await progressSource.upsertProgress(progress);
-            print('✅ Uploaded: ${result.flashcardId} -> ${result.studyStatus}');
-            uploadedCount++;
-          } catch (e) {
-            print('❌ Failed to upload ${progress.flashcardId}: $e');
-          }
-        }
-
-        print('✅ Uploaded $uploadedCount/${localProgress.length} progress');
-      }
-
-      // ========== BƯỚC 3: DOWNLOAD TỪ SERVER ==========
-      print('📥 Downloading progress from server...');
-      final serverProgress = await progressSource.getUserProgress();
-      print('📥 Downloaded ${serverProgress.length} progress from server');
-
-      // Debug: In ra server progress
-      for (var p in serverProgress) {
-        print('📝 Server: ${p.flashcardId} -> ${p.studyStatus}');
-      }
-
-      // ========== BƯỚC 4: MERGE VÀO LOCAL ==========
-      int insertedCount = 0;
-      int updatedCount = 0;
-
-      for (var serverP in serverProgress) {
-        final existing = await localDb
-            .getUserProgressByFlashcardId(serverP.flashcardId.toString());
-
-        if (existing == null) {
-          // Chưa có, thêm mới
-          await localDb.insertUserProgress(serverP);
-          insertedCount++;
-          print(
-              '📥 Inserted: ${serverP.flashcardId} -> ${serverP.studyStatus}');
-        } else {
-          // Đã có, cập nhật nếu server mới hơn
-          final shouldUpdate = serverP.updatedAt != null &&
-              (existing.updatedAt == null ||
-                  serverP.updatedAt!.isAfter(existing.updatedAt!));
-
-          if (shouldUpdate) {
-            await localDb.updateUserProgress(serverP);
-            updatedCount++;
-            print(
-                '🔄 Updated: ${serverP.flashcardId} -> ${serverP.studyStatus}');
-          }
-        }
-      }
-
-      print('✅ Inserted: $insertedCount, Updated: $updatedCount');
-
-      // ========== BƯỚC 5: REFRESH UI ==========
+      // Refresh UI
       if (mounted) {
-        // Cập nhật provider
+        final localDb = LocalDatabase();
+
+        // Refresh user_progress provider
         final allProgress = await localDb.getAllUserProgress();
         ref.read(userProgressProvider.notifier).state = allProgress;
 
-        // Refresh flashcards với progress mới
+        // Refresh flashcards list (để studyStatus được cập nhật)
         await ref.read(localFlashcardsProvider.notifier).loadLocalFlashcards();
 
         // Reset trang
@@ -3303,8 +3293,9 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
 
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content:
-                Text('✅ Synced: $insertedCount new, $updatedCount updated'),
+            content: Text(
+              '✅ Synced: $pulled pulled, $pushed pushed',
+            ),
             backgroundColor: Colors.green,
             duration: const Duration(seconds: 3),
           ),
@@ -3316,7 +3307,8 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-                '❌ Sync failed: ${e.toString().replaceFirst('Exception: ', '')}'),
+              '❌ Sync failed: ${e.toString().replaceFirst('Exception: ', '')}',
+            ),
             backgroundColor: Colors.red,
             duration: const Duration(seconds: 3),
           ),
@@ -4216,5 +4208,56 @@ class _FlashcardListPageState extends ConsumerState<FlashcardListPage> {
         );
       },
     );
+  }
+
+  Future<void> _handleStatusChange(Flashcard card, String newStatus) async {
+    try {
+      final now = DateTime.now();
+      final serverId = _getServerFlashcardId(card);
+
+      // 1. Tạo UserProgress từ card hiện tại
+      final progress = UserProgress(
+        id: '', // để Supabase/local tự sinh nếu cần
+        userId: SupabaseConfig.currentUserId ?? '',
+        flashcardId: serverId,
+        studyStatus: newStatus,
+        srsInterval: card.interval ?? 1,
+        srsEaseFactor: card.easeFactor ?? 2.5,
+        srsNextReview: card.nextReview,
+        updatedAt: now,
+        createdAt: now,
+      );
+
+      // 2. Upsert LOCAL (luôn luôn, kể cả chưa login)
+      await LocalDatabase().insertUserProgress(progress);
+
+      // 3. Push lên Supabase nếu đã login VÀ card có id server
+      if (SupabaseConfig.isAuthenticated && serverId > 0) {
+        // Không await để UI không bị block
+        SyncService().pushOne(progress).then((_) {
+          print('✅ Pushed status "$newStatus" for card $serverId');
+        }).catchError((e) {
+          print('⚠️ Push failed (will retry later): $e');
+        });
+      }
+
+      // 4. Refresh danh sách để UI cập nhật ngay
+      if (mounted) {
+        _loadFlashcardsWithFilter(); // hoặc setState(() {})
+      }
+    } catch (e) {
+      print('❌ Error changing status: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to update status: $e')),
+        );
+      }
+    }
+  }
+
+  // Helper: lấy flashcardId dạng int (0 nếu là card local)
+  int _getServerFlashcardId(Flashcard card) {
+    final parsed = int.tryParse(card.id);
+    return parsed ?? 0;
   }
 }

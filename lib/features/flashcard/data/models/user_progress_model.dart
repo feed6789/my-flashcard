@@ -1,7 +1,7 @@
 class UserProgress {
   final String id;
   final String userId;
-  final int flashcardId; // Đổi từ String sang int
+  final int flashcardId; // bigint trong Supabase
   final String studyStatus;
   final int srsInterval;
   final double srsEaseFactor;
@@ -21,24 +21,34 @@ class UserProgress {
     this.createdAt,
   });
 
+  /// Parse flashcard_id an toàn: chấp nhận int, numeric string, hoặc local id
+  static int _parseFlashcardId(dynamic value) {
+    if (value == null) return 0;
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    if (value is String) {
+      // Chỉ parse được nếu là số thuần
+      return int.tryParse(value) ?? 0;
+    }
+    return 0;
+  }
+
   factory UserProgress.fromJson(Map<String, dynamic> json) {
     return UserProgress(
-      id: json['id'] ?? '',
-      userId: json['user_id'] ?? '',
-      flashcardId: json['flashcard_id'] is String 
-          ? int.tryParse(json['flashcard_id']) ?? 0 
-          : json['flashcard_id'] ?? 0,
+      id: json['id']?.toString() ?? '',
+      userId: json['user_id']?.toString() ?? '',
+      flashcardId: _parseFlashcardId(json['flashcard_id']),
       studyStatus: json['study_status'] ?? 'new',
-      srsInterval: json['srs_interval'] ?? 0,
-      srsEaseFactor: json['srs_ease_factor']?.toDouble() ?? 2.5,
-      srsNextReview: json['srs_next_review'] != null 
-          ? DateTime.parse(json['srs_next_review']) 
+      srsInterval: (json['srs_interval'] as num?)?.toInt() ?? 0,
+      srsEaseFactor: (json['srs_ease_factor'] as num?)?.toDouble() ?? 2.5,
+      srsNextReview: json['srs_next_review'] != null
+          ? DateTime.tryParse(json['srs_next_review'].toString())
           : null,
-      updatedAt: json['updated_at'] != null 
-          ? DateTime.parse(json['updated_at']) 
+      updatedAt: json['updated_at'] != null
+          ? DateTime.tryParse(json['updated_at'].toString())
           : null,
-      createdAt: json['created_at'] != null 
-          ? DateTime.parse(json['created_at']) 
+      createdAt: json['created_at'] != null
+          ? DateTime.tryParse(json['created_at'].toString())
           : null,
     );
   }
@@ -54,6 +64,19 @@ class UserProgress {
       'srs_next_review': srsNextReview?.toIso8601String(),
       'updated_at': updatedAt?.toIso8601String(),
       'created_at': createdAt?.toIso8601String(),
+    };
+  }
+
+  /// Chỉ gửi lên Supabase những field cần thiết
+  Map<String, dynamic> toSupabaseJson({required String userId}) {
+    return {
+      'user_id': userId,
+      'flashcard_id': flashcardId,
+      'study_status': studyStatus,
+      'srs_interval': srsInterval,
+      'srs_ease_factor': srsEaseFactor,
+      'srs_next_review': srsNextReview?.toIso8601String(),
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
     };
   }
 
